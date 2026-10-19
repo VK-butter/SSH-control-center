@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SSH Control Center Setup
+Name[th]=ติดตั้ง SSH Control Center
+Comment=Approve this device and copy its pairing code
+Exec=/usr/bin/sshcc-setup
+Icon=network-server
+Terminal=false
+Categories=System;RemoteAccess;

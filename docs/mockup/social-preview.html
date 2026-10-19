@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<title>SSH Control Center - social preview (1200x630)</title>
+<!-- Source for docs/images/social-preview.png. Render at exactly 1200x630 with headless Edge (DPR 1, --disable-lcd-text).
+     The framed image is docs/images/fleet-mockup.png (fake data). Colours and fonts are taken from desktop/ui/app.css.
+     Re-render on Windows with Leelawadee UI, or on any machine with Noto Sans Thai installed (otherwise Thai shows as boxes). -->
+<style>
+  :root {
+    --bg-app: #090d0b; --bg-surface: #0f1512; --border-subtle: #1c2621; --border-strong: #2a3931;
+    --text-primary: #edf3ef; --text-secondary: #adbab2; --text-muted: #829389;
+    --accent-text: #56d99a; --status-warning-text: #fde047; --status-warning-bg: rgba(234, 179, 8, .12);
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Noto Sans Thai", "Leelawadee UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: var(--bg-app); color: var(--text-primary); -webkit-font-smoothing: antialiased; }
+  body { position: relative; background:
+    radial-gradient(900px 380px at 12% -10%, rgba(52, 211, 153, .13), transparent 70%),
+    var(--bg-app); }
+  .brand { position: absolute; left: 60px; top: 50px; display: flex; align-items: center; gap: 18px; }
+  .brand svg { width: 58px; height: 58px; flex: none; }
+  h1 { margin: 0; font-size: 56px; line-height: 1.1; font-weight: 650; letter-spacing: -.02em; }
+  .pitch { position: absolute; left: 60px; top: 134px; width: 1040px; margin: 0; font-size: 27px; line-height: 1.38; color: var(--text-secondary); }
+  .ribbon { position: absolute; right: 60px; top: 62px; padding: 6px 16px; border-radius: 99px; font-size: 18px; font-weight: 600;
+    background: var(--status-warning-bg); color: var(--status-warning-text); border: 1px solid rgba(234, 179, 8, .38); white-space: nowrap; }
+  .frame { position: absolute; left: 24px; top: 248px; width: 1152px; height: 382px; border: 1px solid var(--border-strong); border-bottom: 0; border-radius: 12px 12px 0 0; overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(52, 211, 153, .06), 0 -8px 60px rgba(52, 211, 153, .10), 0 24px 60px rgba(0, 0, 0, .55); }
+  /* crop of the 2880x1080 PNG (scale 0.475): sidebar and side padding are cut off horizontally, top bar, heading and search toolbar are cut off vertically
+     (margin-top -131px), so the machine graph is shown about 1.2x larger than a plain downscale. The bottom edge fades softly into the card edge. */
+  .frame img { display: block; width: 1368px; max-width: none; margin-left: -205px; margin-top: -131px;
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 90%, transparent 100%); mask-image: linear-gradient(to bottom, #000 0, #000 90%, transparent 100%); }
+</style>
+</head>
+<body>
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#111916" stroke="#22332c"/><path d="M9.5 11.5 14.5 16l-5 4.5" fill="none" stroke="#34d399" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M16.5 20.5h6.5" stroke="#d1fae5" stroke-width="2.2" stroke-linecap="round"/></svg>
+    <h1>SSH Control Center</h1>
+  </div>
+  <div class="ribbon">Illustrative mockup, fake data</div>
+  <p class="pitch">Run commands, edit files and open terminals on your Windows and Ubuntu machines over SSH, from one place, yourself or through an AI agent (MCP).</p>
+  <div class="frame"><img src="../images/fleet-mockup.png" alt="Fleet page of the desktop app, illustrative mockup with fake data"></div>
+</body>
+</html>

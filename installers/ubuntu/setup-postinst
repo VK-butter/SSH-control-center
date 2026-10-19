@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+  echo "Open SSH Control Center Setup to approve this device."
+  echo "Headless server: sshcc-setup --terminal (no SSH permission has been added)."
+fi

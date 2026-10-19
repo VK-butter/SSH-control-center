@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+# New package versions must refuse BEFORE an older prerm could stop active jobs.
+if [ "$1" = upgrade ]; then
+    python3 - <<'PY'
+import pathlib,sqlite3
+p=pathlib.Path("/var/lib/sshcc/jobs.sqlite")
+if p.exists():
+    with sqlite3.connect(p.as_uri()+"?mode=ro",uri=True) as db:
+        count=db.execute("SELECT COUNT(*) FROM jobs WHERE json_extract(record,'$.status') IN ('queued','running')").fetchone()[0]
+    assert count==0, "E_BUSY: wait for running SSH Control Center jobs before upgrading"
+p=pathlib.Path("/var/lib/sshcc/terminals.sqlite")
+if p.exists():
+    with sqlite3.connect(p.as_uri()+"?mode=ro",uri=True) as db:
+        count=db.execute("SELECT COUNT(*) FROM terminals WHERE json_extract(record,'$.status')='running'").fetchone()[0]
+    assert count==0, "E_BUSY: close SSH Control Center terminals before upgrading"
+PY
+fi

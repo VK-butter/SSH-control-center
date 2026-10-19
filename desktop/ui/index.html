@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="th" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>SSH Control Center</title><link rel="icon" href="data:,">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" type="module"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#111916" stroke="#22332c"/><path d="M9.5 11.5 14.5 16l-5 4.5" fill="none" stroke="#34d399" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M16.5 20.5h6.5" stroke="#d1fae5" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <div class="brand-name">SSH Control Center<span>จัดการเครื่องผ่าน SSH</span></div>
+    </div>
+    <nav aria-label="เมนูหลัก">
+      <button data-page="fleet" class="nav active"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.25" width="12.5" height="8.5" rx="1.5"/><path d="M5.5 13.75h5M8 10.75v3"/></svg>เครื่องทั้งหมด <span id="fleet-count" class="count">0</span></button>
+      <button data-page="enroll" class="nav"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 5v6M5 8h6"/></svg>เพิ่มเครื่อง</button>
+      <button data-page="masters" class="nav"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.75 2.75 3.75v4c0 3.1 2.2 5.4 5.25 6.5 3.05-1.1 5.25-3.4 5.25-6.5v-4Z"/><path d="m5.75 8 1.6 1.6 2.9-3"/></svg>Master ที่อนุญาต</button>
+      <button data-page="service" class="nav"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.25" width="12" height="4.5" rx="1.25"/><rect x="2" y="9.25" width="12" height="4.5" rx="1.25"/><path d="M4.75 4.5h.01M4.75 11.5h.01M8 4.5h3.25M8 11.5h3.25"/></svg>Local service</button>
+    </nav>
+    <div class="sidebar-foot" title="ปิดหน้าต่างนี้แล้ว service และงานที่รันอยู่ยังทำงานต่อ"><span id="node-dot" class="dot pending"></span><strong id="node-label">กำลังเชื่อมต่อ…</strong><span id="node-role">ผ่าน local service</span></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <div id="breadcrumb" class="breadcrumb"><strong>เครื่องทั้งหมด</strong></div>
+      <div class="topbar-tools">
+        <div class="service-pill" title="สถานะ local service บนเครื่องนี้"><span id="service-dot" class="dot pending"></span><span id="service-label">กำลังตรวจ service</span></div>
+        <button class="icon-button" id="refresh-all" aria-label="รีเฟรชข้อมูล" title="รีเฟรชข้อมูล"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3"/><path d="M13.25 2.25v3.5h-3.5"/></svg></button>
+      </div>
+    </header>
+    <div id="notice" class="notice" role="status" hidden><span id="notice-text"></span><button type="button" class="icon-button" id="notice-close" aria-label="ปิดข้อความ" title="ปิดข้อความ"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div>
+    <main id="main" tabindex="-1"><div class="empty"><p>กำลังอ่านข้อมูลจาก local service…</p></div></main>
+  </div>
+  <dialog id="shell-dialog">
+    <form id="open-shell-session">
+      <h2>เลือก session ของ <span id="shell-machine"></span></h2>
+      <p class="help">เครื่องนี้มีผู้ใช้ Owner login อยู่หลาย session เลือก session ที่จะเปิด Shell</p>
+      <input id="shell-target" type="hidden" name="targetId">
+      <label>Owner session<select id="shell-session" name="ownerSessionId" required></select></label>
+      <div class="form-actions"><button type="submit" class="primary">เปิด Shell</button><button type="button" data-action="close-shell-dialog">ยกเลิก</button></div>
+    </form>
+  </dialog>
+  <dialog id="two-way-dialog">
+    <form id="confirm-two-way">
+      <h2>เปิดสองทางกับ <span class="two-way-peer"></span></h2>
+      <p>ให้ <strong class="two-way-peer"></strong> สั่งเครื่องลูกของเครื่องนี้ได้ เหมือนที่เครื่องนี้สั่งเครื่องลูกของเครื่องนั้นอยู่แล้ว</p>
+      <p class="help">Windows จะขอสิทธิ์ admin หนึ่งครั้งเพื่อติดตั้งบนเครื่องนี้:</p>
+      <ul class="help dialog-list"><li>OpenSSH Server (ถ้ายังไม่มี)</li><li>บัญชี sshcc-bridge ที่รับเฉพาะคำสั่งของ Control Center</li><li>กุญแจของ <span class="two-way-peer"></span> ใน authorized_keys และบทบาท Target ของ service</li></ul>
+      <details><summary>รายละเอียดเพิ่มเติม</summary><p class="help">ระบบลงทะเบียนเครื่องนี้เป็น Target ของเครื่องนั้นด้วยขั้นตอนจับคู่ปกติ · Firewall คงตามเดิม เครื่องนั้นต้องเข้าพอร์ต 22 ของเครื่องนี้ได้ · ปิดภายหลังได้ด้วย “ปิดการ merge” หรือถอนสิทธิ์ Master</p></details>
+      <input type="hidden" name="targetId">
+      <div class="form-actions"><button type="submit" class="primary">ติดตั้งและเปิดสองทาง</button><button type="button" data-action="close-two-way-dialog" autofocus>ยกเลิก</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

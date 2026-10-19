@@ -1,0 +1,17 @@
+# Build the native desktop against the supported Ubuntu 24.04 ABI.
+FROM rust:1.95-bookworm AS toolchain
+FROM ubuntu:24.04 AS build
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev \
+    libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev \
+    ca-certificates openssh-client python3 python3-psutil procps curl file \
+    dbus-x11 xvfb xauth x11-utils tint2 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=toolchain /usr/local/cargo /usr/local/cargo
+COPY --from=toolchain /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked -p sshcc-desktop -p sshcc
+CMD ["sleep", "infinity"]

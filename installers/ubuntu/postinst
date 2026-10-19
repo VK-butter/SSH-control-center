@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    install -d -m 0700 /var/lib/sshcc
+    install -d -m 0755 /etc/sshcc
+    systemctl daemon-reload || true
+    if [ -f /var/lib/sshcc/config.json ]; then
+        systemctl enable sshcc
+        if [ "${SSHCC_SETUP_INSTALL:-0}" != 1 ]; then systemctl restart sshcc; fi
+    else
+        echo 'Configure role and owner: sudo /usr/lib/sshcc/setup.sh --role master --owner "$SUDO_USER"'
+    fi
+fi
