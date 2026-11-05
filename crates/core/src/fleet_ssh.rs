@@ -61,7 +61,7 @@ fn display_path(path: &Path) -> String {
         .replace('\\', "/")
 }
 fn session_config(state: &Path, target: &Target, route: &Route) -> Result<Session> {
-    let identity = managed_key(state, &key_path(state, &target.tenant))?;
+    let identity = managed_key(state, &super::rotation::identity(state, target)?)?;
     let root = state.join("transport");
     fs::create_dir_all(&root)?;
     crate::security::protect(&root, true)?;

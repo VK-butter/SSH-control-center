@@ -209,6 +209,8 @@ When a job starts, the Target saves the whole request in its job database, `jobs
 
 The Master keeps a copy too. Its `fleet.sqlite` also stores each job request (script, working folder, environment values and options) so that an identical retry can be recognised. The same no-secrets rule applies.
 
+The Master's Activity tab keeps its own list of the jobs it started (`job_log` in `fleet.sqlite`, for 14 days by default): the first 4,096 characters of each script and the names of the environment variables, never their values.
+
 Do not put passwords or tokens in scripts, command lines or environment values. Provision credentials on the Target instead ([INSTALL.md](INSTALL.md) explains how).
 
 *For developers:* `crates/core/src/jobs.rs` (the `payload` and `record` columns, `start`, `list`); `crates/core/src/fleet.rs` (the Master's `dispatches` table).
@@ -231,7 +233,9 @@ The "group" (tenant) selects which key a Master uses and organizes the list. It 
 
 ### 4.9 Merging Masters extends reach
 
-When one Master is merged into another, requests travel one hop to the merged Master, which sends them with its own keys. Whoever controls the merging Master can then also act on the merged Master's Targets. The merged Master can stop it with `relays.revoke`, and the merging Master can remove the merge with `merges.remove`. In a two-way merge each side can revoke its own direction. Revoking the Master itself (`masters.revoke`) also stops its relays.
+When one Master is merged into another, requests travel one hop to the merged Master, which sends them with its own keys. Whoever controls the merging Master can then also act on the merged Master's Targets, within the **Merge Role** the merged Master grants it. A Merge starts as Full control. View only lets it list, read and download, but not run jobs, change files, open a Shell or act on containers. Either role can be limited to hosts with chosen Tags, and hosts outside the limit are not listed at all. The merged Master enforces the role on every relayed request and Shell frame, so the merging Master's own window can't get around it. A Master that is paired directly with a Target always has full rights there.
+
+A merged Master also passes on the hosts it reaches through its own Merges (unless its pass-through switch is off for you), so a request can cross up to four Masters. Each Master on the way checks its own grant, so the lowest role along the path applies, and records the whole path in its audit log. A Master refuses a request whose path already holds it (a loop) or holds more than four Masters. The path is reported by the Masters before it and is not signed: a Master can lie about who came before it, but it can never get more than the grant the next Master gives it. The merged Master can stop it with `relays.revoke`, and the merging Master can remove the merge with `merges.remove`. In a two-way merge each side can revoke its own direction. Revoking the Master itself (`masters.revoke`) also stops its relays.
 
 *For developers:* [AGENT.md](AGENT.md), section "Merged Masters"; `crates/core/src/service.rs` (`handle`).
 
@@ -244,6 +248,14 @@ Installers built from this source are not code-signed. The generated `SHA256SUMS
 ### 4.11 No third-party audit, and limited testing
 
 This repository contains no third-party security audit. It ships no continuous-integration configuration and no dependency-scan configuration. It does have automated tests, including ones for host-key mismatch, revoked keys and rejected local callers. [VALIDATION.md](VALIDATION.md) lists what is tested and, just as important, what is not. For example, nothing in the tree runs the Windows installer end to end.
+
+### 4.12 The audit log is a record for the owner, not proof
+
+The Master writes one line to `audit.jsonl` in its state folder for each action that changes something (and for each Shell opened or file downloaded), refused ones included. It holds the time, the action, what it was done to, the result, the channel and the OS account. It never holds scripts, file contents, output, environment values or passphrases. It is kept 14 days by default, and it is not in backups.
+
+It is not tamper-proof. The Owner or an administrator on the Master can edit or delete it, and nothing signs it. The channel (`desktop`, `cli`, `mcp`, `merge: <Master>`) is a label the client reports, not a check: any program running as the Owner can claim any channel ([ADR 0002](adr/0002-team-sharing-through-merged-masters.md)). If writing fails (a full disk, for example), the action still goes ahead and the window shows a warning until writing works again. Use it to look back at what happened, not as evidence against someone with access to the Master.
+
+*For developers:* `crates/core/src/activity.rs` (`AUDITED`, `after`); `crates/core/src/service.rs` (`handle_as`).
 
 ## 5. Safe use checklist
 

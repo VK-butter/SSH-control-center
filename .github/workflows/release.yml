@@ -1,0 +1,163 @@
+# Builds the installers the way docs/INSTALL.md "Build packages" describes, on both systems, and publishes them.
+#   - A tag v* (pushed only when the owner says so) publishes a GitHub Release with the files and SHA256SUMS.
+#   - A pull request that touches the build, or a manual run, builds the same files as an artifact, without a Release,
+#     so they can be checked before tagging.
+# Order (thin templates never embed other templates): 1) thin Ubuntu + thin Windows, 2) the template manifest,
+# 3) the full Master installers, each carrying both thin templates, 4) checksums, then the Release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-deb.sh
+      - scripts/build-windows.ps1
+      - scripts/build-templates.py
+      - installers/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ubuntu-thin:
+    name: 1 · Ubuntu packages and thin template
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config libsystemd-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev openssh-client
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (service, desktop, thin template)
+        run: bash scripts/build-deb.sh --desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-thin
+          path: |
+            dist/*.deb
+          if-no-files-found: error
+
+  windows-thin:
+    name: 1 · Windows thin template
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build thin template
+        shell: pwsh
+        run: scripts/build-windows.ps1 -Desktop -ThinTemplateOnly -NsisPath "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-thin
+          path: dist/sshcc-client-windows-template.exe
+          if-no-files-found: error
+
+  templates:
+    name: 2 · Template manifest
+    needs: [ubuntu-thin, windows-thin]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: ubuntu-thin, path: in }
+      - uses: actions/download-artifact@v4
+        with: { name: windows-thin, path: in }
+      - name: Freeze the pair and write its manifest
+        run: |
+          mkdir templates
+          cp in/sshcc-client-ubuntu-template.deb in/sshcc-client-windows-template.exe templates/
+          python3 scripts/build-templates.py --directory templates
+          cat templates/template-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: templates
+          path: templates/
+          if-no-files-found: error
+
+  windows-full:
+    name: 3 · Windows Master installer
+    needs: templates
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with: { name: templates, path: templates }
+      - name: Build the full installer (both templates inside)
+        shell: pwsh
+        run: scripts/build-windows.ps1 -Desktop -TemplatesDir templates -NsisPath "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-full
+          path: |
+            dist/sshcc-*-windows-x64-setup.exe
+            dist/sshcc-*-windows-x64.zip
+          if-no-files-found: error
+
+  ubuntu-full:
+    name: 3 · Ubuntu Master installer
+    needs: templates
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: templates, path: dist }
+      - name: Build the full installer from the frozen pair
+        run: bash scripts/build-deb.sh --desktop --setup --skip-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-full
+          path: dist/sshcc-*-ubuntu-setup.deb
+          if-no-files-found: error
+
+  publish:
+    name: 4 · Checksums and Release
+    needs: [ubuntu-thin, templates, windows-full, ubuntu-full]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: in }
+      - name: Collect the files
+        run: |
+          mkdir out
+          cp in/windows-full/* in/ubuntu-full/* out/
+          cp in/ubuntu-thin/sshcc_*_amd64.deb out/
+          cp in/ubuntu-thin/sshcc-desktop_*_amd64.deb out/ 2>/dev/null || true
+          cp in/templates/* out/
+          (cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+      - name: Check both Master installers carry both templates
+        run: |
+          set -e
+          deb=$(ls out/sshcc-*-ubuntu-setup.deb)
+          dpkg-deb -c "$deb" | grep -q 'release-templates/sshcc-client-windows-template.exe'
+          dpkg-deb -c "$deb" | grep -q 'release-templates/sshcc-client-ubuntu-template.deb'
+          zip=$(ls out/sshcc-*-windows-x64.zip)
+          unzip -l "$zip" | grep -q 'templates/sshcc-client-windows-template.exe'
+          unzip -l "$zip" | grep -q 'templates/sshcc-client-ubuntu-template.deb'
+          echo "both packages carry both templates"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: out/
+      - name: Publish the Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --title "SSH Control Center $GITHUB_REF_NAME" --generate-notes \
+            --notes "Unsigned installers built from this fork. Check the files against SHA256SUMS. Install a Master from sshcc-*-windows-x64-setup.exe or sshcc-*-ubuntu-setup.deb; Targets get their installer from the Master."

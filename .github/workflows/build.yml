@@ -1,0 +1,107 @@
+# Builds what the Mac cannot: the Tauri desktop crate on Ubuntu and Windows. Also runs the core tests and the UI
+# fixture checks so a PR shows one green/red result.
+name: build
+
+on:
+  pull_request:
+  push:
+    branches: [main, engraved-violet, engraved-violet-public]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ubuntu:
+    name: Ubuntu · core tests + CLI + desktop
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Same packages as installers/ubuntu/Dockerfile.build needs for the desktop crate.
+      - name: Install build packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config libsystemd-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev openssh-client
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Core tests
+        run: cargo test --locked -p sshcc-core -- --test-threads=1
+      - name: Build CLI and desktop
+        run: cargo build --locked -p sshcc -p sshcc-desktop
+      - name: Desktop tests
+        run: cargo test --locked -p sshcc-desktop
+
+  windows:
+    name: Windows · CLI + desktop
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build CLI and desktop
+        run: cargo build --locked -p sshcc -p sshcc-desktop
+      - name: Installer scripts parse (Setup, PairingBootstrap with /UPDATE)
+        shell: pwsh
+        run: |
+          foreach ($f in 'installers/windows/Setup.ps1','installers/windows/PairingBootstrap.ps1','installers/windows/Uninstall.ps1') {
+            $t = $null; $e = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$t, [ref]$e) | Out-Null
+            if ($e.Count) { $e | ForEach-Object { Write-Error "${f}: $($_.Message)" }; exit 1 }
+          }
+          $boot = Get-Content installers/windows/PairingBootstrap.ps1 -Raw
+          if ($boot -notmatch '\[switch\]\$Update' -or $boot -notmatch '-Unattended') { Write-Error 'PairingBootstrap.ps1 lost its -Update path'; exit 1 }
+
+  ui:
+    name: UI fixture checks (Playwright)
+    runs-on: ubuntu-24.04
+    container: mcr.microsoft.com/playwright:v1.48.2-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Playwright for the scripts
+        run: npm install --prefix /tmp/pw --no-save --no-audit --no-fund playwright@1.48.2
+      - name: Add host
+        run: node desktop/tests/add-host.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Masters page
+        run: node desktop/tests/masters-page.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Language EN | ไทย
+        run: node desktop/tests/language.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Backup and restore
+        run: node desktop/tests/backup.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Tags and group run
+        run: node desktop/tests/tags.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Activity
+        run: node desktop/tests/activity.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Team sharing
+        run: node desktop/tests/team-sharing.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Health alarms
+        run: node desktop/tests/alarms.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Target updates
+        run: node desktop/tests/target-update.cjs
+        env: { NODE_PATH: /tmp/pw/node_modules }
+      - name: Keep screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: |
+            artifacts/add-host-ui/
+            artifacts/language-ui/
+            artifacts/backup-ui/
+            artifacts/tags-ui/
+            artifacts/activity-ui/
+            artifacts/team-sharing-ui/
+            artifacts/alarms-ui/
+            artifacts/target-update-ui/
+          if-no-files-found: ignore

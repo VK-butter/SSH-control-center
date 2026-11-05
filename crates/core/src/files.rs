@@ -15,8 +15,49 @@ const CHUNK: u64 = 1024 * 1024;
 // Jobs and project execution remain independent and never hold this lock.
 static MUTATIONS: Mutex<()> = Mutex::new(());
 
+/// Home folder of the account running this call (the Owner in owner-session mode).
+fn home_dir() -> Option<String> {
+    #[cfg(windows)]
+    let from_env = std::env::var("USERPROFILE").ok();
+    #[cfg(unix)]
+    let from_env = std::env::var("HOME").ok();
+    if let Some(home) = from_env.filter(|h| !h.is_empty()) {
+        return Some(home);
+    }
+    #[cfg(unix)]
+    unsafe {
+        // Services often start without HOME; ask the password database instead.
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut out = std::ptr::null_mut();
+        let mut buf = vec![0u8; 16384];
+        if libc::getpwuid_r(libc::geteuid(), &mut pwd, buf.as_mut_ptr().cast(), buf.len(), &mut out) == 0
+            && !out.is_null()
+            && !pwd.pw_dir.is_null()
+        {
+            return Some(std::ffi::CStr::from_ptr(pwd.pw_dir).to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+/// "~" or "~/rest" (also "~\\rest") becomes the home folder; other paths are unchanged.
+fn expand_home(raw: &str) -> Result<Option<String>> {
+    expand_home_with(raw, home_dir)
+}
+
+fn expand_home_with(raw: &str, home: impl FnOnce() -> Option<String>) -> Result<Option<String>> {
+    let rest = match raw.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') => rest,
+        _ => return Ok(None),
+    };
+    let home = home().context("E_FILE: home folder is unknown for this account")?;
+    Ok(Some(format!("{home}{rest}")))
+}
+
 pub fn handle(method: &str, p: &Value) -> Result<Value> {
-    let path = Path::new(protocol::string(p, "path")?);
+    let raw = protocol::string(p, "path")?;
+    let expanded = expand_home(raw)?;
+    let path = Path::new(expanded.as_deref().unwrap_or(raw));
     security::ensure_absolute(path)?;
     match method {
         "fs.list" => {
@@ -27,13 +68,23 @@ pub fn handle(method: &str, p: &Value) -> Result<Value> {
                 }
                 let item = item?;
                 let md = item.metadata()?;
+                let modified = md
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
                 entries.push(json!({
                     "name":item.file_name().to_string_lossy(),"path":item.path().to_string_lossy(),
-                    "isDirectory":md.is_dir(),"isSymlink":item.file_type()?.is_symlink(),"size":md.len()
+                    "isDirectory":md.is_dir(),"isSymlink":item.file_type()?.is_symlink(),"size":md.len(),
+                    "modified":modified
                 }));
             }
             entries.sort_by_key(|v| v["name"].as_str().unwrap_or_default().to_lowercase());
-            Ok(json!(entries))
+            // A "~" request also returns the folder it resolved to, so the client can show and climb it.
+            Ok(match &expanded {
+                Some(resolved) => json!({"path":resolved,"entries":entries}),
+                None => json!(entries),
+            })
         }
         "fs.read" => {
             let mut file = fs::File::open(path)?;
@@ -96,6 +147,7 @@ pub fn handle(method: &str, p: &Value) -> Result<Value> {
             let _ = fs::remove_file(&tmp);
             result
         }
+        "fs.upload" => upload(path, p),
         "fs.mkdir" => {
             let _guard = MUTATIONS
                 .lock()
@@ -116,6 +168,120 @@ pub fn handle(method: &str, p: &Value) -> Result<Value> {
             Ok(json!({"removed":true}))
         }
         _ => bail!("E_METHOD: unknown filesystem method"),
+    }
+}
+/// Upper bound for one chunked upload, so a runaway client cannot fill the disk.
+const UPLOAD_MAX: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Chunked upload: chunks are appended in order to a private `.sshcc-upload-<id>.part`
+/// next to the destination, which replaces the destination only on `done`, with the
+/// same expectedSha256 guard and atomic commit as fs.write. `abort` deletes the part.
+fn upload(path: &Path, p: &Value) -> Result<Value> {
+    let id = protocol::string(p, "uploadId")?;
+    if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("E_ARGUMENT: uploadId must be 32 hex characters");
+    }
+    let parent = path.parent().context("E_ARGUMENT: parent required")?;
+    let part = parent.join(format!(".sshcc-upload-{id}.part"));
+    if p["abort"].as_bool() == Some(true) {
+        match fs::remove_file(&part) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        return Ok(json!({"aborted":true}));
+    }
+    let offset = p["offset"].as_u64().unwrap_or(0);
+    let bytes = STANDARD.decode(p["contentBase64"].as_str().unwrap_or_default())?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        bail!("E_LIMIT: an upload chunk is limited to 4 MiB");
+    }
+    if offset + bytes.len() as u64 > UPLOAD_MAX {
+        bail!("E_LIMIT: uploads are limited to 2 GiB");
+    }
+    let mut file = if offset == 0 {
+        sweep_stale_parts(parent);
+        private_temp(&part)?
+    } else {
+        let metadata = fs::symlink_metadata(&part).context("E_CONFLICT: upload not started or already finished")?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            bail!("E_ARGUMENT: upload part is not a regular file");
+        }
+        if metadata.len() != offset {
+            bail!("E_CONFLICT: upload offset {offset} does not match {} bytes received", metadata.len());
+        }
+        let mut options = fs::OpenOptions::new();
+        options.append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        options.open(&part)?
+    };
+    let result = (|| -> Result<Value> {
+        file.write_all(&bytes)?;
+        let received = offset + bytes.len() as u64;
+        if p["done"].as_bool() != Some(true) {
+            return Ok(json!({"received":received}));
+        }
+        file.sync_all()?;
+        let _guard = MUTATIONS
+            .lock()
+            .map_err(|_| anyhow::anyhow!("E_FILE: mutation lock poisoned"))?;
+        let existing = match fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    bail!("E_ARGUMENT: write to a regular file, not a symlink");
+                }
+                Some(metadata)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(expected) = p["expectedSha256"].as_str() {
+            let actual = if existing.is_some() { hash_file(&mut fs::File::open(path)?)? } else { String::new() };
+            if actual != expected {
+                bail!("E_CONFLICT: file hash changed");
+            }
+        }
+        if let Some(metadata) = &existing {
+            preserve_unix_metadata(&file, metadata)?;
+        }
+        drop(file);
+        let digest = hash_file(&mut fs::File::open(&part)?)?;
+        commit_file(&part, path, existing.is_some())?;
+        Ok(json!({"path":path.to_string_lossy(),"size":received,"sha256":digest}))
+    })();
+    // A failed commit (conflict) keeps the part so the client can retry the last
+    // chunk with another guard; it deletes it with `abort`. Other errors drop it.
+    if let Err(error) = &result {
+        if !error.to_string().contains("E_CONFLICT") {
+            let _ = fs::remove_file(&part);
+        }
+    }
+    result
+}
+/// Parts left by an app that closed mid-upload are removed after a day, when the
+/// next upload into the same folder starts.
+fn sweep_stale_parts(folder: &Path) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with(".sshcc-upload-") && name.ends_with(".part")) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .ok()
+            .filter(|metadata| metadata.is_file())
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age.as_secs() > 24 * 3600);
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
     }
 }
 fn read_open_file(file: &mut fs::File, p: &Value) -> Result<Value> {
@@ -286,6 +452,43 @@ fn commit_file(temp: &Path, path: &Path, existing: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn chunk(path: &Path, id: &str, offset: u64, data: &[u8], extra: Value) -> Result<Value> {
+        let mut params = json!({"path":path.to_string_lossy(),"uploadId":id,"offset":offset,"contentBase64":STANDARD.encode(data)});
+        for (key, value) in extra.as_object().unwrap() {
+            params[key] = value.clone();
+        }
+        handle("fs.upload", &params)
+    }
+    #[test]
+    fn chunked_upload_appears_only_when_done() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("big.bin");
+        let id = "0123456789abcdef0123456789abcdef";
+        chunk(&path, id, 0, b"hello ", json!({})).unwrap();
+        assert!(!path.exists());
+        assert!(chunk(&path, id, 3, b"x", json!({})).unwrap_err().to_string().contains("E_CONFLICT"));
+        let done = chunk(&path, id, 6, b"world", json!({"done":true,"expectedSha256":""})).unwrap();
+        assert_eq!(done["size"], 11);
+        assert_eq!(fs::read(&path).unwrap(), b"hello world");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn chunked_upload_guard_keeps_part_until_replace_or_abort() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("taken.txt");
+        fs::write(&path, b"old").unwrap();
+        let id = "fedcba9876543210fedcba9876543210";
+        let error = chunk(&path, id, 0, b"new", json!({"done":true,"expectedSha256":""})).unwrap_err();
+        assert!(error.to_string().contains("E_CONFLICT"));
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        chunk(&path, id, 3, b"", json!({"done":true})).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        let other = "00000000000000000000000000000001";
+        chunk(&path, other, 0, b"partial", json!({})).unwrap();
+        chunk(&path, other, 0, b"", json!({"abort":true})).unwrap();
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert!(chunk(&path, "../../etc", 0, b"", json!({})).unwrap_err().to_string().contains("uploadId"));
+    }
     #[test]
     fn opened_file_read_retains_matching_bytes_and_hash_after_replacement() {
         let directory = tempfile::tempdir().unwrap();
@@ -425,5 +628,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(dacl(&path), before);
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+
+    #[test]
+    fn tilde_expands_only_as_a_whole_prefix() {
+        let home = || Some("/home/owner".to_string());
+        assert_eq!(expand_home_with("~", home).unwrap().as_deref(), Some("/home/owner"));
+        assert_eq!(expand_home_with("~/src", home).unwrap().as_deref(), Some("/home/owner/src"));
+        assert_eq!(expand_home_with("~bob/x", home).unwrap(), None);
+        assert_eq!(expand_home_with("/etc", home).unwrap(), None);
+        assert!(expand_home_with("~", || None).is_err());
     }
 }

@@ -34,6 +34,19 @@ jobs.list { targetId } -> array
 jobs.status/logs/cancel { targetId, jobId, offset?: integer, limit?: integer, stream?: stdout|stderr }
 files.list/read/write { targetId, path, offset?, limit?, contentBase64?, expectedSha256? }
 files.mkdir/remove { targetId, path } (remove nonrecursive only)
+files.upload { targetId, path, uploadId (32 hex), offset, contentBase64 (≤4 MiB), done?, expectedSha256?, abort? } (chunks appended in order; replaces path atomically on done; 2 GiB max)
+pairing.cancel { requestId } -> { requestId, cancelled } (only while awaiting_approval; an approved Target keeps its access until revoked there)
+folders.list -> { folders: [{id,master,name}], members: {targetId: folderId} }
+folders.create { name, master?: "local"|mergedMasterTargetId } · folders.rename { id, name } · folders.delete { id } · folders.assign { targetId, folderId|null }
+Folders only organize the Datacenter tree on this Master: optional, single level, at most one per machine, names unique per Master branch (case-insensitive, 1-64 chars), and a machine can only join a folder of its own Master branch. They never affect keys, tenants or routing. Deleting a folder unfiles its machines; removing a Target drops its membership.
+datacenters.list -> { datacenters: [{id,name}], members: {master: datacenterId} } · datacenters.create { name } · datacenters.rename { id, name } · datacenters.delete { id } · datacenters.assign { master: "local"|mergedMasterTargetId, datacenterId|null }
+Datacenters group Masters in the Inventory tree of this Master: optional, names unique (case-insensitive), deleting one moves its Masters back under Inventory. Organizational only.
+monitor.stats { targetId? } -> { os, at, uptimeSeconds, cpu: {total, idle, count}, memory: {total, available}, swap: {total, free}, load: [1,5,15]|null, disk: {path, total, free}|null, net: {rx, tx}|null }
+Monitoring returns raw counters (CPU time, network bytes) and gauges in one bridge call (sys.stats); callers derive CPU % and rates from two samples. Linux reads /proc and statvfs("/"); Windows uses GetSystemTimes, GlobalMemoryStatusEx and C:\ free space (no load average or network counters). Nothing is sampled in the background. The desktop polls only while the Monitoring tab is visible and focused (2/5/10 s, pause).
+containers.list { targetId? } -> { runtime: docker|podman|null, containers: [{id,name,image,state,status,ports,created}], images: [{id,repository,tag,size?,sizeBytes?,created}], truncated, error? }
+containers.logs { targetId?, container, tail?: 1..500 } -> { runtime, container, content, truncated }
+containers.action { targetId?, container, action: start|stop|restart } -> { runtime, container, action, ok }
+Containers: omit targetId for the machine the service runs on (any role); with targetId the Master role is required and the request is relayed like files.* (bridge methods ct.list/ct.logs/ct.action). The service runs the docker (preferred) or podman CLI it finds on PATH, as root/SYSTEM, so rootless Owner containers are not listed. Bounds: 10 s per list/logs call (30 s for actions), 2 MiB output, 500 rows, 500 log lines / 256 KiB. A stopped daemon returns `error` with empty lists rather than failing. Container references must be a name or ID ([A-Za-z0-9][A-Za-z0-9_.-]*); no shell is used.
 All client-facing methods return either a Value result or a structured error.
 job status fields: id, masterId, script, cwd, shell, status (queued/running/succeeded/failed/cancelled/interrupted), createdAt, startedAt, finishedAt, exitCode.
 jobs.logs -> { content, nextOffset, eof }; files.read -> { contentBase64, size, sha256, nextOffset, eof }.
@@ -41,7 +54,7 @@ Execution uses the configured mode: logged-in Owner for schema 2 configurations,
 
 ## SSH/target protocol
 Master invokes installed sshcc bridge over strict OpenSSH. Installer key forced command supplies --master-id UUID and --master-key SHA256:FINGERPRINT, binding the request to the authenticated public key. JSON line request {method,params}; response {ok,result,error}.
-Transport wraps operation as method bridge.request, params {expectedTargetId: registration.nodeId, request:{method:"runner.start"|runner.list|runner.status|runner.logs|runner.cancel|fs.list|fs.read|fs.write|fs.mkdir|fs.remove|system.status, params:{...}}}.
+Transport wraps operation as method bridge.request, params {expectedTargetId: registration.nodeId, request:{method:"runner.start"|runner.list|runner.status|runner.logs|runner.cancel|fs.list|fs.read|fs.write|fs.upload|fs.mkdir|fs.remove|system.status, params:{...}}}.
 CLI bridge adds its forced master identity and key fingerprint to the envelope, then calls local service. Service checks the exact active enrollment key, target identity and method allowlist, and injects authenticated masterId into runner.start. Revocation is checked each request.
 Target owns jobs; stable job ID duplicates return same record only if payload matches. No automatic re-run after crash.
 Known-host mismatch stops all fallback. Operational transport failures may try next registered route with same job ID.
@@ -76,6 +89,12 @@ Windows replacement metadata follows [ReplaceFileW](https://learn.microsoft.com/
 ## Operator-approved pairing
 
 `pairing.create` accepts `{label,tenant,os,address}` plus advanced `targetId,user,port,routeKind,routes`. It persists a request and returns `{requestId,targetId,label,tenant,os,state,createdAt,updatedAt,envelope,diagnostics}`. `pairing.status {}` returns requests; `{requestId,retry?,routes?}` returns one and can retry diagnostics with new routes while preserving identity/pins. `pairing.complete {code}` verifies and imports a matching receipt atomically, then runs diagnostics. States are `awaiting_approval`, `needs_attention`, `ready`; ready requires SYSTEM/root. Repeated identical receipts do not overwrite edited routes or create another Target.
+
+Add-host helpers (local IPC only, never on the Target bridge or `relay.*`):
+pairing.check { address, port?: 22, requestId? } -> { address, port, reachable, banner, os: windows|linux|null, alreadyAs, alreadyTargetId, alreadyRequestId } (read only; banner-only probe, never logs in; `alreadyAs` is the label of a saved Target with the same route address/port, else of a request awaiting approval for it; `requestId` and its sibling are not counted)
+pairing.preview { code } -> { requestId, targetId, label, hostName, os, hostKeySha256 } (read only; same validation and errors as `pairing.complete`; the SHA-256 fingerprint is computed on the Master)
+pairing.complete { code, label? } (`label` saves the Target under that name in the same write; 1-256 characters, no control characters)
+`pairing.create` with `os:"unknown"` (no SSH banner yet) creates two requests, Windows and Ubuntu, with the same label, Target ID, address and Group, and returns an array of both. Each carries `sibling` (the other's `requestId`; `null` for a single request, and absent in requests stored before the field existed). Completing one deletes its sibling while that sibling is still `awaiting_approval`; a code for the deleted one then fails with `E_PAIRING_REPLACED` (the other installer of the pair was used first). `os:"unknown"` is refused by `relay.pair` (`E_ARGUMENT`) and by `sshcc pairing create`, which always name the OS and expect one request. The 50-Target cap counts saved Targets only.
 
 The envelope `{schemaVersion:1,requestId,masterId,bundleDigest,targetLabel,bundle}` wraps unchanged enrollment v2. The receipt `{schemaVersion:1,requestId,masterId,bundleDigest,registration}` wraps unchanged registration v2. Code encoding is `SSHCC1.<base64url-no-padding compact UTF-8 JSON>.<SHA-256 hex JSON>` with a 64 KiB input cap and no compression. Checksum is corruption detection; trust begins with Target approval and operator transfer, followed by pinned SSH checks. No private key/token is embedded.
 

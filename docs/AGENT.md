@@ -33,9 +33,19 @@ The Target owns stdout/stderr, exit code, timestamps and originating Master iden
 {"targetId":"dev-01","path":"/srv/project"}
 ~~~
 
-Pass the above to files.list. files.read returns base64 bytes, size, SHA256 and a continuation offset. files.write takes contentBase64, absolute path and optional expectedSha256; it replaces atomically. Use the hash guard to avoid overwriting a concurrently edited file. A single write is limited to 4 MiB decoded; larger deployments should use a job/script or a deliberately provisioned artifact transport. files.mkdir creates directories. files.remove removes only a file or empty directory.
+Pass the above to files.list. A path may start with `~` (the home folder of the account the call runs as — the Owner in owner-session mode); files.list then returns {path, entries} with the resolved folder instead of a bare array. Entries include modified (Unix seconds). files.read returns base64 bytes, size, SHA256 and a continuation offset. files.write takes contentBase64, absolute path and optional expectedSha256; it replaces atomically. Use the hash guard to avoid overwriting a concurrently edited file. A single write is limited to 4 MiB decoded; larger deployments should use a job/script or a deliberately provisioned artifact transport. files.upload sends a larger file in order-appended chunks (uploadId of 32 hex characters, offset, contentBase64 up to 4 MiB each, done:true on the last chunk with an optional expectedSha256; abort:true discards it); the file appears atomically only when done, up to 2 GiB. files.mkdir creates directories. files.remove removes only a file or empty directory.
 
 To transfer between Targets, read from one and write the decoded/base64 content to the other through the owner client. No background project synchronization or merge resolution is implied.
+
+## Containers
+
+`containers_list`, `containers_logs` and `containers_action` (JSON `containers.list|logs|action`) read docker or podman on a Target, or on the current Master when `targetId` is omitted. Listing and logs are read-only; start/stop/restart only when the operator asked. The service uses root/SYSTEM rootful runtimes, so an Owner's rootless Podman containers are not shown.
+
+~~~text
+sshcc request containers.list --params '{"targetId":"dev-01"}'
+sshcc request containers.logs --params '{"targetId":"dev-01","container":"web","tail":100}'
+sshcc request containers.action --params '{"targetId":"dev-01","container":"web","action":"restart"}'
+~~~
 
 ## MCP stdio
 
@@ -81,7 +91,7 @@ sshcc request merges.list
 sshcc request merges.remove --params-file merge.json
 ~~~
 
-merge.json is {"targetId":"build-server"}. merges.discover reports which registered Targets are Masters. Merged Targets appear in targets.list with relayed:true, via and viaLabel, and are addressed as `<merged Master Target ID>/<its Target ID>`, for example `build-server/dev-01`. Every job, file, terminal and doctor call (CLI, MCP, desktop) accepts that ID. A machine this Master already reaches directly is listed only once, as its direct Target. Merges are one hop: a merged Master's own merges are not shared.
+merge.json is {"targetId":"build-server"}. merges.discover reports which registered Targets are Masters; pass {"targetId":...} to probe only that Target. Merged Targets appear in targets.list with relayed:true, via and viaLabel, and are addressed as `<merged Master Target ID>/<its Target ID>`, for example `build-server/dev-01`. Every job, file, terminal and doctor call (CLI, MCP, desktop) accepts that ID. A machine this Master already reaches directly is listed only once, as its direct Target. Merges are one hop: a merged Master's own merges are not shared.
 
 Merge status is merged, error, outdated (the merged Master must be upgraded), not-master or disabled. A failed sync keeps the last known Targets. Relayed calls wait up to 100 seconds because they include the merged Master's own SSH call. If the merged Master is offline, its Targets are unreachable through the merge.
 
@@ -89,7 +99,7 @@ The merged Master lists merging Masters with relays.list and can stop one with r
 
 ### Fleet health
 
-fleet.health {"refresh":false} returns one row per Target, merged ones included: {targetId, online, checkedAt, error, failures, isMaster, version, via}. online is true, false, or null for unknown. A routine check only reads the OpenSSH banner of a direct route (3 second timeout, no login), so isMaster and version keep their last SSH-checked values; Targets reachable only through ProxyJump get a full SSH system.status. refresh:true asks every Target's service over SSH (20 second timeout). Results are cached for 30 seconds, and a Target that keeps failing is retried after 60, 120, then 240 seconds unless refresh:true. At most 8 probes run at once, and concurrent callers share one probe. Merged rows come from the merged Master (relay.health), which is not asked while that Master is offline. When that Master cannot be reached, its Targets report online:null with error "via <label>: ...", because their own state is unknown rather than offline.
+fleet.health {"refresh":false} returns one row per Target, merged ones included: {targetId, online, checkedAt, error, failures, isMaster, version, latencyMs, onlineSince, via}. online is true, false, or null for unknown. latencyMs is how long the last banner read took (kept from the previous one after an SSH check; null while offline); onlineSince is the checkedAt of the first check in the current online run (null while offline). A routine check only reads the OpenSSH banner of a direct route (3 second timeout, no login), so isMaster and version keep their last SSH-checked values; Targets reachable only through ProxyJump get a full SSH system.status. refresh:true asks every Target's service over SSH (20 second timeout). Results are cached for 30 seconds, and a Target that keeps failing is retried after 60, 120, then 240 seconds unless refresh:true. At most 8 probes run at once, and concurrent callers share one probe. Merged rows come from the merged Master (relay.health), which is not asked while that Master is offline. When that Master cannot be reached, its Targets report online:null with error "via <label>: ...", because their own state is unknown rather than offline.
 
 ### Two-way merges
 

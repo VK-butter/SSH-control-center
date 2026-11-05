@@ -28,6 +28,9 @@ pub fn tools() -> Vec<Value> {
         ("terminal_status","Read terminal status, executor and last acknowledged input sequence.",vec!["targetId","terminalId"]),
         ("terminal_resize","Resize a terminal in rows and columns.",vec!["targetId","terminalId","rows","cols"]),
         ("terminal_close","Close a terminal and its process tree.",vec!["targetId","terminalId"]),
+        ("containers_list","List containers (running and stopped) and images on a machine through its docker or podman. Omit targetId for the current Master.",vec![]),
+        ("containers_logs","Read the last lines of a container's logs. Omit targetId for the current Master.",vec!["container"]),
+        ("containers_action","Start, stop or restart one container. Omit targetId for the current Master. Only when the user asked for it.",vec!["container","action"]),
     ];
     definitions.into_iter().map(|(name,description,required)|{
         let mut properties=serde_json::Map::new();
@@ -45,6 +48,9 @@ pub fn tools() -> Vec<Value> {
         if name=="jobs_logs"||name=="files_read"{for field in ["offset","limit"]{properties.insert(field.into(),json!({"type":"integer","minimum":0}));}}
         if name=="jobs_logs"{properties.insert("stream".into(),json!({"type":"string","enum":["stdout","stderr"]}));}
         if name=="files_write"{properties.insert("expectedSha256".into(),json!({"type":"string"}));}
+        if name.starts_with("containers_"){properties.insert("targetId".into(),json!({"type":"string","description":"Target ID; omit for the current Master"}));}
+        if name=="containers_logs"{properties.insert("tail".into(),json!({"type":"integer","minimum":1,"maximum":500,"default":200}));}
+        if name=="containers_action"{properties.insert("action".into(),json!({"type":"string","enum":["start","stop","restart"]}));}
         if name=="pairing_create" {
             for field in ["targetId","user","routeKind"] { properties.insert(field.into(),json!({"type":"string"})); }
             properties.insert("port".into(),json!({"type":"integer","minimum":1,"maximum":65535}));
@@ -55,11 +61,11 @@ pub fn tools() -> Vec<Value> {
             properties.insert("retry".into(),json!({"type":"boolean"}));
             properties.insert("routes".into(),json!({"type":"array","items":{"type":"object"}}));
         }
-        let readonly=matches!(name,"targets_list"|"targets_doctor"|"jobs_list"|"jobs_status"|"jobs_logs"|"files_list"|"files_read"|"terminal_read"|"terminal_status");
+        let readonly=matches!(name,"targets_list"|"targets_doctor"|"jobs_list"|"jobs_status"|"jobs_logs"|"files_list"|"files_read"|"terminal_read"|"terminal_status"|"containers_list"|"containers_logs");
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":readonly,"destructiveHint":!readonly,"openWorldHint":true}})
     }).chain(agent_tools::definitions()).collect()
 }
-const INSTRUCTIONS: &str = "Work on a Target like a local project: targets_list first, then targets_doctor once before the first action. Doctor ok only means SSH and identity passed; work can run only when ready is true. When ownerSessionId is omitted, the Target auto-picks an active or newest eligible Owner session and reports it in result.executor.selected; pass ownerSessionId to pin a login and reuse that same id on every files_*, jobs_start and exec_run call to that Target when you need a stable binding. Find files with files_search and files_grep, read them with files_read_text, change them with files_edit (or files_write_text for new files), and build or test with exec_run. Use jobs_status / jobs_logs only after exec_run times out, files_read / files_write only for binary files, and terminal_* only when a person needs an interactive session. Paths are absolute on the Target. Leave asAdmin off unless the user asked for administrator rights. Use a new UUID jobId per command and reuse it only to reconcile or keep waiting; never blindly repeat a deployment. No project locks are enforced.";
+const INSTRUCTIONS: &str = "Work on a Target like a local project: targets_list first, then targets_doctor once before the first action. Doctor ok only means SSH and identity passed; work can run only when ready is true. When ownerSessionId is omitted, the Target auto-picks an active or newest eligible Owner session and reports it in result.executor.selected; pass ownerSessionId to pin a login and reuse that same id on every files_*, jobs_start and exec_run call to that Target when you need a stable binding. Find files with files_search and files_grep, read them with files_read_text, change them with files_edit (or files_write_text for new files), and build or test with exec_run. Use jobs_status / jobs_logs only after exec_run times out, files_read / files_write only for binary files, and terminal_* only when a person needs an interactive session. Paths are absolute on the Target. Leave asAdmin off unless the user asked for administrator rights. Use a new UUID jobId per command and reuse it only to reconcile or keep waiting; never blindly repeat a deployment. No project locks are enforced. containers_list shows docker/podman containers and images on a machine (omit targetId for the current Master); use containers_action only when the user asked to start, stop or restart a container.";
 pub fn serve(input: impl BufRead, mut output: impl Write) -> Result<()> {
     let mut input = input;
     let mut initialized = false;

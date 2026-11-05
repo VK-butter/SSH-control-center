@@ -121,9 +121,11 @@ pub fn run() {
             return;
         }
         let setup = (|| -> Result<_, Box<dyn std::error::Error>> {
-            let open = MenuItem::new("เปิด SSH Control Center", true, None);
+            // The tray follows the OS language (see `options::tray_text`).
+            let text = crate::options::tray_text(crate::options::os_is_thai());
+            let open = MenuItem::new(text.open, true, None);
             let separator = PredefinedMenuItem::separator();
-            let quit = MenuItem::new("ปิดไอคอน Tray (Service ยังทำงานต่อ)", true, None);
+            let quit = MenuItem::new(text.quit, true, None);
             let open_id = open.id().clone();
             let quit_id = quit.id().clone();
             let menu = Menu::new();

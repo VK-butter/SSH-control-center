@@ -5,7 +5,9 @@ param(
     [string]$PackageDirectory = $PSScriptRoot,
     [switch]$Console,
     [switch]$InspectOnly,
-    [switch]$RequirePairing
+    [switch]$RequirePairing,
+    # Pushed by a Master as a one-off SYSTEM task: update the installed service in place, keeping its state.
+    [switch]$Update
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -38,6 +40,17 @@ function Read-PairingTrailer([string]$Path) {
     } finally { $stream.Dispose() }
 }
 $inspection = $null
+if ($Update) {
+    # The installed host keeps its role, Owner, label, bridge account and execution mode (Setup.ps1 reads them
+    # back from installation.json and config.json); no pairing and no window.
+    $state = Join-Path $env:ProgramData 'SSHControlCenter'
+    $previous = Join-Path $state 'installation.json'
+    if (-not (Test-Path -LiteralPath $previous)) { Write-Error 'Nothing to update: SSH Control Center is not installed here'; exit 2 }
+    $installed = Get-Content -LiteralPath $previous -Raw -Encoding UTF8 | ConvertFrom-Json
+    $result = Join-Path $state 'update-result.json'
+    & (Join-Path $PackageDirectory 'Setup.ps1') -Role target -TargetUser $installed.bridgeUser -ExecutionMode preserve -Unattended -ResultFile $result
+    exit $LASTEXITCODE
+}
 try {
     $payload = Read-PairingTrailer ([IO.Path]::GetFullPath($InstallerPath))
     if ($RequirePairing -and $null -eq $payload) { throw 'ไม่พบข้อมูลจับคู่ในชุดติดตั้ง กรุณาสร้างชุดติดตั้งใหม่จากเครื่องหลัก' }
@@ -107,7 +120,11 @@ try {
             if (-not $script:code.StartsWith('SSHCC1.')) { throw 'รหัสยืนยันไม่ถูกต้อง' }
             New-Item -ItemType Directory -Path $savedDir -Force | Out-Null
             [IO.File]::WriteAllText($savedReceipt,$script:code,$utf8)
-            $script:statusMessage = 'ติดตั้งและตรวจ service สำเร็จแล้ว นำรหัสนี้กลับไปวางที่เครื่องหลัก'
+            # Entry 8: the same 6 digits the Master shows; the code below stays for an older Master.
+            $digits = (@(& $exe pairing short-code --code-file $receiptFile 2>$null) -join '').Trim()
+            $script:statusMessage = if ($LASTEXITCODE -eq 0 -and $digits) {
+                'เทียบเลขนี้กับที่เครื่องหลัก:  '+$digits+[Environment]::NewLine+'ถ้าตรงกัน กด “ใช่ ตรงกัน” ที่เครื่องหลัก · ถ้าเทียบไม่ได้ ใช้รหัสด้านล่างแทน'
+            } else { 'ติดตั้งและตรวจ service สำเร็จแล้ว นำรหัสนี้กลับไปวางที่เครื่องหลัก' }
         } else {
             $configuredOwner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
             if (Test-Path -LiteralPath $resultFile) {

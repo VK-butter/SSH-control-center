@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/cli", "desktop/src-tauri"]
 default-members = ["crates/core", "crates/cli"]
 [workspace.package]
-version = "0.4.0"
+version = "0.5.2"
 edition = "2021"
 license = "MIT"
 rust-version = "1.90"
@@ -22,3 +22,11 @@ hex = "0.4"
 
 flate2 = "1"
 tar = "0.4"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+
+# Backup passphrase hashing (Argon2id) is too slow unoptimized for the core tests.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

@@ -114,12 +114,31 @@ pub fn init(
     if !label.is_empty() {
         cfg.label = label.into();
     }
+    save(state, &cfg)?;
+    Ok(cfg)
+}
+fn save(state: &Path, cfg: &Config) -> Result<()> {
     let path = state.join("config.json");
     let tmp = state.join(format!(".config-{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&cfg)?)?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(cfg)?)?;
     security::protect(&tmp, false)?;
     security::replace(&tmp, &path)?;
     security::protect(&path, false)?;
+    Ok(())
+}
+/// Restore only: this install becomes the backed-up Master (node ID, label, roles). The Owner, execution mode
+/// and allowed principals chosen by this machine's installer stay.
+pub fn adopt(state: &Path, node_id: &str, label: &str, roles: &[String]) -> Result<Config> {
+    let mut cfg = load(state)?;
+    uuid::Uuid::parse_str(node_id).context("E_CONFIG: invalid node ID")?;
+    if roles.is_empty() || roles.iter().any(|r| !matches!(r.as_str(), "master" | "target")) {
+        bail!("E_CONFIG: unsupported roles");
+    }
+    cfg.schema_version = 2;
+    cfg.node_id = node_id.into();
+    cfg.label = label.into();
+    cfg.roles = roles.to_vec();
+    save(state, &cfg)?;
     Ok(cfg)
 }
 /// Installer only: preserves the original Owner when selecting a new execution policy.
@@ -130,10 +149,6 @@ pub fn set_execution_mode(state: &Path, mode: &str) -> Result<Config> {
     let mut cfg = load(state)?;
     cfg.schema_version = 2;
     cfg.execution_mode = mode.into();
-    let path = state.join("config.json");
-    let tmp = state.join(format!(".config-{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&cfg)?)?;
-    security::protect(&tmp, false)?;
-    security::replace(&tmp, &path)?;
+    save(state, &cfg)?;
     Ok(cfg)
 }

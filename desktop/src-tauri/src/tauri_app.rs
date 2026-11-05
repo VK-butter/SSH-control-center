@@ -126,9 +126,9 @@ async fn open_shell(target_id: String, owner_session_id: Option<String>) -> Resu
             method: "targets.list".into(), params: serde_json::json!({}),
         }).map_err(|error| format!("{error:#}"))?;
         let target = targets.as_array().and_then(|rows| rows.iter().find(|row| row["id"] == target_id))
-            .ok_or_else(|| "ไม่พบเครื่องนี้ในทะเบียนของ Master".to_string())?;
+            .ok_or_else(|| "This machine is not in the Master registry".to_string())?;
         if target["runnerInstalled"] != true {
-            return Err("ติดตั้ง Target service บนเครื่องนี้ก่อนเปิด Shell".into());
+            return Err("Install the Target service on this machine before opening a shell".into());
         }
         let mut params = serde_json::json!({"targetId":target_id});
         if let Some(id) = &owner_session_id { params["ownerSessionId"] = serde_json::json!(id); }
@@ -138,14 +138,14 @@ async fn open_shell(target_id: String, owner_session_id: Option<String>) -> Resu
             let messages: Vec<_> = check["stages"].as_array().into_iter().flatten()
                 .filter(|stage| stage["ok"] == false)
                 .filter_map(|stage| stage["message"].as_str()).collect();
-            return Err(format!("เชื่อมต่อเครื่องไม่ได้: {}", messages.join("; ")));
+            return Err(format!("Cannot connect to the machine: {}", messages.join("; ")));
         }
         let status = &check["result"];
         if status.get("activeTerminals").is_none() {
-            return Err("เปิด Shell ต้องใช้ Target service ที่รองรับ terminal กรุณาอัปเกรดเครื่องนี้".into());
+            return Err("The terminal needs a Target service that supports it. Upgrade this machine".into());
         }
         let executor = &status["executor"];
-        let error = executor["error"].as_str().unwrap_or("Owner ยังไม่พร้อมทำงาน");
+        let error = executor["error"].as_str().unwrap_or("Owner is not ready");
         if executor["ready"] != true {
             if owner_session_id.is_none() && error.contains("E_OWNER_SESSION_REQUIRED") {
                 return Ok(serde_json::json!({"needsSession":true,"sessions":executor["sessions"]}));
@@ -162,13 +162,13 @@ async fn open_shell(target_id: String, owner_session_id: Option<String>) -> Resu
         arguments.extend(["--".into(), target_id.clone().into()]);
         #[cfg(windows)]
         let pid = crate::windows_window::spawn_shell(&executable, &arguments)
-            .map_err(|error| format!("เปิดหน้าต่าง Terminal ไม่ได้: {error}"))?;
+            .map_err(|error| format!("Could not open a Terminal window: {error}"))?;
         #[cfg(not(windows))]
         let pid = {
             let mut command = std::process::Command::new("x-terminal-emulator");
             command.arg("-e").arg(&executable);
             command.args(&arguments);
-            let child = command.spawn().map_err(|error| format!("เปิดหน้าต่าง Terminal ไม่ได้: {error}"))?;
+            let child = command.spawn().map_err(|error| format!("Could not open a Terminal window: {error}"))?;
             let pid = child.id();
             std::thread::spawn(move || { let mut child = child; let _ = child.wait(); });
             pid
@@ -180,12 +180,12 @@ async fn open_shell(target_id: String, owner_session_id: Option<String>) -> Resu
 // The caller cannot supply a local path. Access is limited to the user's native
 // file selection, so the webview needs no general filesystem permission.
 #[tauri::command]
-async fn open_json(app: AppHandle) -> Result<Option<Value>, String> {
+async fn open_json(app: AppHandle, title: Option<String>) -> Result<Option<Value>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let Some(path) = app
             .dialog()
             .file()
-            .set_title("Open registration or enrollment")
+            .set_title(title.unwrap_or_else(|| "Open registration or enrollment".into()))
             .add_filter("JSON", &["json"])
             .blocking_pick_file()
         else {
@@ -209,12 +209,16 @@ async fn open_json(app: AppHandle) -> Result<Option<Value>, String> {
 }
 
 #[tauri::command]
-async fn save_json(app: AppHandle, document: Value) -> Result<Option<String>, String> {
+async fn save_json(
+    app: AppHandle,
+    document: Value,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let Some(path) = app
             .dialog()
             .file()
-            .set_title("Save public enrollment bundle")
+            .set_title(title.unwrap_or_else(|| "Save public enrollment bundle".into()))
             .add_filter("JSON", &["json"])
             .set_file_name("sshcc-enrollment.json")
             .blocking_save_file()
@@ -230,42 +234,219 @@ async fn save_json(app: AppHandle, document: Value) -> Result<Option<String>, St
     .map_err(|error| error.to_string())?
 }
 
-// Setup data is fetched again from the owner-authorized service. The webview
-// supplies only a request ID; writing is limited to the native save dialog.
+// The webview names only the host and path; the bytes never pass through it and
+// are written solely to the location picked in the native save dialog.
 #[tauri::command]
-async fn save_setup(app: AppHandle, request_id: String) -> Result<Option<Value>, String> {
+async fn save_remote_file(
+    app: AppHandle,
+    target_id: String,
+    path: String,
+    name: String,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let status = client::call(&Request {
-            method: "pairing.status".into(),
-            params: serde_json::json!({"requestId": request_id}),
-        })
-        .map_err(|error| format!("{error:#}"))?;
-        let envelope = &status["envelope"];
-        let windows = envelope["bundle"]["os"] == "windows";
-        let extension = if windows { "exe" } else { "deb" };
-        let filename = format!(
-            "sshcc-client-{}.{}",
-            status["targetId"].as_str().unwrap_or("new-machine"),
-            extension
-        );
+        let Some(dest) = app
+            .dialog()
+            .file()
+            .set_title(title.unwrap_or_else(|| "Download file".into()))
+            .set_file_name(name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let dest = dest.into_path().map_err(|error| error.to_string())?;
+        client::download(&target_id, &path, &dest).map_err(|error| format!("{error:#}"))?;
+        Ok(Some(dest.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Largest backup file the window reads; the service refuses anything bigger too.
+const MAX_BACKUP_BYTES: u64 = 4 * 1024 * 1024;
+
+// Backup: the native save dialog first, then the service seals the file with the
+// passphrase. The webview names no path; the file is written only where the person chose.
+#[tauri::command]
+async fn save_backup(
+    app: AppHandle,
+    passphrase: String,
+    name: String,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    tauri::async_runtime::spawn_blocking(move || {
         let Some(path) = app
             .dialog()
             .file()
-            .set_title("บันทึกชุดติดตั้งสำหรับเครื่องใหม่")
-            .add_filter("ชุดติดตั้ง", &[extension])
+            .set_title(title.unwrap_or_else(|| "Save the backup of this Master".into()))
+            .add_filter("SSH Control Center backup", &["sshccbak"])
+            .set_file_name(name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        let made = client::call(&Request {
+            method: "backup.create".into(),
+            params: serde_json::json!({ "passphrase": passphrase }),
+        })
+        .map_err(|error| format!("{error:#}"))?;
+        let bytes = STANDARD
+            .decode(made["file"].as_str().unwrap_or_default())
+            .map_err(|error| error.to_string())?;
+        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+// Update fallback (entry 8): the installer that updates one host, saved where the person
+// chooses, to run on that host by hand. The Ubuntu file is the service package itself.
+#[tauri::command]
+async fn save_upgrade(app: AppHandle, target_id: String, os: String, title: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let templates = sshcc_core::setup_package::default_templates();
+        let (bytes, _) = sshcc_core::upgrade::package(&templates, &os, &target_id).map_err(|error| format!("{error:#}"))?;
+        let name = if os == "windows" { "sshcc-update.exe".to_owned() } else { format!("sshcc_{}.deb", sshcc_core::upgrade::ours()) };
+        let Some(path) = app.dialog().file().set_title(title.unwrap_or_else(|| "Save the update installer".into())).set_file_name(name).blocking_save_file() else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+// Activity CSV: the native save dialog first, then the service builds the CSV for the
+// filter on screen. The webview names no path and sends no file content.
+#[tauri::command]
+async fn save_csv(
+    app: AppHandle,
+    params: Value,
+    name: String,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title(title.unwrap_or_else(|| "Export CSV".into()))
+            .add_filter("CSV", &["csv"])
+            .set_file_name(name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        let made = client::call(&Request { method: "activity.csv".into(), params })
+            .map_err(|error| format!("{error:#}"))?;
+        std::fs::write(&path, made["csv"].as_str().unwrap_or_default()).map_err(|error| error.to_string())?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+// Restore: the person picks a .sshccbak file in the native dialog. The webview gets
+// only its name and its (encrypted) bytes, never a path it could choose itself.
+#[tauri::command]
+async fn open_backup(app: AppHandle, title: Option<String>) -> Result<Option<Value>, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title(title.unwrap_or_else(|| "Choose a backup file".into()))
+            .add_filter("SSH Control Center backup", &["sshccbak"])
+            .blocking_pick_file()
+        else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .map_err(|error| error.to_string())?
+            .take(MAX_BACKUP_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() as u64 > MAX_BACKUP_BYTES {
+            return Err("E_BACKUP_NOT_A_BACKUP: the file is too large to be a backup".into());
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(Some(serde_json::json!({ "name": name, "file": STANDARD.encode(bytes) })))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+// Setup data is fetched again from the owner-authorized service. The webview
+// supplies only a request ID (and the dialog titles in the window's language);
+// writing is limited to the native save dialog.
+#[tauri::command]
+async fn save_setup(
+    app: AppHandle,
+    request_id: String,
+    title: Option<String>,
+    folder_title: Option<String>,
+) -> Result<Option<Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = |id: &str| {
+            client::call(&Request {
+                method: "pairing.status".into(),
+                params: serde_json::json!({"requestId": id}),
+            })
+            .map_err(|error| format!("{error:#}"))
+        };
+        let request = status(&request_id)?;
+        let templates = sshcc_core::setup_package::default_templates();
+        // An unknown-OS pair: one folder, both installers (Windows .exe and Ubuntu .deb).
+        if let Some(sibling) = request["sibling"].as_str() {
+            let other = status(sibling)?;
+            let Some(folder) = app
+                .dialog()
+                .file()
+                .set_title(folder_title.unwrap_or_else(|| {
+                    "Choose a folder for the installers (Windows and Ubuntu)".into()
+                }))
+                .blocking_pick_folder()
+            else {
+                return Ok(None);
+            };
+            let folder = folder.into_path().map_err(|error| error.to_string())?;
+            return sshcc_core::setup_package::build_into(
+                &[request["envelope"].clone(), other["envelope"].clone()],
+                &templates,
+                &folder,
+            )
+            .map(Some)
+            .map_err(|error| format!("{error:#}"));
+        }
+        let envelope = &request["envelope"];
+        let filename =
+            sshcc_core::setup_package::file_name(envelope).map_err(|error| format!("{error:#}"))?;
+        let extension =
+            sshcc_core::setup_package::extension(envelope).map_err(|error| format!("{error:#}"))?;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title(title.unwrap_or_else(|| "Save installer for the new machine".into()))
+            .add_filter("Installer", &[extension])
             .set_file_name(filename)
             .blocking_save_file()
         else {
             return Ok(None);
         };
         let path = path.into_path().map_err(|error| error.to_string())?;
-        sshcc_core::setup_package::build(
-            envelope,
-            &sshcc_core::setup_package::default_templates(),
-            &path,
-        )
-        .map(Some)
-        .map_err(|error| format!("{error:#}"))
+        sshcc_core::setup_package::build(envelope, &templates, &path)
+            .map(Some)
+            .map_err(|error| format!("{error:#}"))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -285,15 +466,15 @@ async fn merge_two_way(app: AppHandle, target_id: String) -> Result<Value, Strin
         let call = |method: &str, params: Value| {
             client::call(&Request { method: method.into(), params }).map_err(|error| format!("{error:#}"))
         };
-        progress("request", "ขอคำขอจับคู่จาก Master ปลายทาง");
+        progress("request", "Requesting pairing from the remote Master");
         let reply = call("merges.pair_request", serde_json::json!({"targetId":target_id}))?;
         let code = if reply.get("existingTargetId").is_some() {
             None
         } else {
-            progress("install", "ติดตั้ง SSH server และสิทธิ์ของ Master ปลายทางบนเครื่องนี้");
+            progress("install", "Installing the SSH server and the remote Master’s access on this machine");
             Some(run_pairing_setup(&reply["envelope"], &|message| progress("install", message))?)
         };
-        progress("confirm", "ให้ Master ปลายทางตรวจเครื่องนี้และ merge กลับ");
+        progress("confirm", "Remote Master is checking this machine and merging back");
         let mut params = serde_json::json!({"targetId":target_id});
         if let Some(code) = code { params["code"] = serde_json::json!(code); }
         let result = call("merges.pair_complete", params)?;
@@ -309,7 +490,7 @@ fn run_pairing_setup(envelope: &Value, progress: &dyn Fn(&str)) -> Result<String
     use std::os::windows::process::CommandExt;
     let text = |error: std::io::Error| error.to_string();
     let install = std::env::current_exe().map_err(text)?
-        .parent().ok_or("ไม่พบโฟลเดอร์ที่ติดตั้ง")?.to_path_buf();
+        .parent().ok_or("Installation folder not found")?.to_path_buf();
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
     let hex = format!("{:032x}", nanos ^ ((std::process::id() as u128) << 96));
     let run_id = format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32]);
@@ -351,7 +532,7 @@ fn run_pairing_setup(envelope: &Value, progress: &dyn Fn(&str)) -> Result<String
         let error = std::fs::read_to_string(stage.join("result.json")).ok()
             .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
             .and_then(|r| r["error"].as_str().filter(|e| !e.is_empty()).map(str::to_owned))
-            .unwrap_or_else(|| format!("ตัวติดตั้งจบโดยไม่มีรหัสจับคู่ ({status}) อาจถูกยกเลิกที่หน้าขอสิทธิ์ admin"));
+            .unwrap_or_else(|| format!("The installer exited without a pairing code ({status}); the admin prompt may have been cancelled"));
         Err(error)
     })();
     let _ = std::fs::remove_dir_all(&staging);
@@ -360,7 +541,7 @@ fn run_pairing_setup(envelope: &Value, progress: &dyn Fn(&str)) -> Result<String
 
 #[cfg(not(windows))]
 fn run_pairing_setup(_envelope: &Value, _progress: &dyn Fn(&str)) -> Result<String, String> {
-    Err("เปิดสองทางอัตโนมัติรองรับเฉพาะ Master ที่เป็น Windows ตอนนี้".into())
+    Err("Automatic two-way setup currently supports Windows Masters only".into())
 }
 
 fn open_management_window(app: &AppHandle, isolated_window: bool) {
@@ -398,11 +579,14 @@ fn show_window(app: &AppHandle) {
             .title("SSH Control Center")
             .inner_size(1180.0, 780.0)
             .min_inner_size(820.0, 600.0)
+            // Let the page receive files dropped from the desktop (Files tab upload).
+            .disable_drag_drop_handler()
             .build();
         OPENING.store(false, Ordering::Release);
         if let Err(error) = result {
+            let text = crate::options::tray_text(crate::options::os_is_thai());
             app.dialog()
-                .message(format!("Cannot open the management window: {error}"))
+                .message(format!("{}: {error}", text.cannot_open))
                 .title("SSH Control Center")
                 .show(|_| {});
         }
@@ -465,6 +649,7 @@ fn run_benchmark(app: AppHandle, cycles: u8, report: std::path::PathBuf) {
     });
 }
 pub fn run_tauri(isolated_window: bool) {
+    client::set_channel("desktop");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let benchmark = match benchmark_options(&args) {
         Ok(options) => options,
@@ -479,6 +664,7 @@ pub fn run_tauri(isolated_window: bool) {
     } else {
         Duration::ZERO
     };
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut context = tauri::generate_context!();
     // Separate instance identity and WebView2 data directory from the resident
     // tray and any browser processes created by an earlier tray version.
@@ -505,6 +691,11 @@ pub fn run_tauri(isolated_window: bool) {
             open_json,
             save_json,
             save_setup,
+            save_remote_file,
+            save_backup,
+            open_backup,
+            save_csv,
+            save_upgrade,
             merge_two_way,
             client_links,
             client_connect,
@@ -519,16 +710,11 @@ pub fn run_tauri(isolated_window: bool) {
                 }
                 return Ok(());
             }
-            let open =
-                MenuItem::with_id(app, "open", "เปิด SSH Control Center", true, None::<&str>)?;
+            // The tray follows the OS language (see `options::tray_text`).
+            let text = crate::options::tray_text(crate::options::os_is_thai());
+            let open = MenuItem::with_id(app, "open", text.open, true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
-            let quit = MenuItem::with_id(
-                app,
-                "quit",
-                "ปิดไอคอน Tray (Service ยังทำงานต่อ)",
-                true,
-                None::<&str>,
-            )?;
+            let quit = MenuItem::with_id(app, "quit", text.quit, true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
             TrayIconBuilder::new()
                 .icon(Image::from_bytes(include_bytes!("../icons/icon.png"))?)

@@ -1,0 +1,15 @@
+# Build contexts (tests/containers/Dockerfile, desktop/tests/Dockerfile.ubuntu) need the sources only.
+.git
+target
+target-docker
+artifacts
+output
+desktop/output
+desktop/src-tauri/gen
+node_modules
+.claude
+.scratch
+.oil-ui
+docs/research
+*.log
+.DS_Store

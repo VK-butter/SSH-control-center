@@ -18,9 +18,11 @@ use uuid::Uuid;
 mod transport;
 #[path = "fleet_merge.rs"]
 mod merge;
-pub(crate) use merge::relay_attach;
+#[path = "fleet_rotation.rs"]
+pub mod rotation;
+pub(crate) use merge::{relay_attach, stream_allowed};
 pub use merge::{
-    record_merge, relay_health, relay_join, relay_pair, relay_pair_complete, relay_request,
+    set_hop, Hop, MAX_HOPS, record_merge, relay_health, relay_join, relay_pair, relay_pair_complete, relay_request,
 };
 pub(crate) type RemoteStream = transport::Stream;
 pub const MAX_TARGETS: usize = 50;
@@ -94,6 +96,21 @@ pub(crate) fn database(state: &Path) -> Result<Connection> {
          CREATE TABLE IF NOT EXISTS merges (target_id TEXT PRIMARY KEY, document TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS health (target_id TEXT PRIMARY KEY, document TEXT NOT NULL);"
     )?;
+    // Merge Roles (entry 6): what this Master grants each Master that merged it. Older rows become Full control,
+    // all hosts, pass-through on.
+    let columns: Vec<String> = db
+        .prepare("SELECT name FROM pragma_table_info('relays')")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (column, definition) in [
+        ("role", "TEXT NOT NULL DEFAULT 'full'"),
+        ("tags", "TEXT"),
+        ("pass_through", "INTEGER NOT NULL DEFAULT 1"),
+    ] {
+        if !columns.iter().any(|c| c == column) {
+            db.execute_batch(&format!("ALTER TABLE relays ADD COLUMN {column} {definition}"))?;
+        }
+    }
     Ok(db)
 }
 fn slug(value: &str, field: &str) -> Result<()> {
@@ -504,7 +521,8 @@ fn masters(state: &Path) -> Result<Value> {
 fn key_path(state: &Path, tenant: &str) -> PathBuf {
     state.join("keys").join(format!("{tenant}.ed25519"))
 }
-fn quiet_command(name: &str) -> Command {
+pub(crate) fn quiet_command(name: &str) -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut command = Command::new(name);
     #[cfg(windows)]
     {
@@ -744,6 +762,7 @@ fn dispatch(state: &Path, config: &Config, request: &Request) -> Result<Value> {
         .context("request params must be an object")?
         .clone();
     remote.remove("targetId");
+    let relay = merge::Relay::take(&mut remote);
     let method = match request.method.as_str() {
         "jobs.start" => "runner.start",
         "jobs.list" => "runner.list",
@@ -755,6 +774,7 @@ fn dispatch(state: &Path, config: &Config, request: &Request) -> Result<Value> {
         "files.search" => "fs.search",
         "files.grep" => "fs.grep",
         "files.write" => "fs.write",
+        "files.upload" => "fs.upload",
         "files.mkdir" => "fs.mkdir",
         "files.remove" => "fs.remove",
         "terminal.open" => "pty.open",
@@ -763,6 +783,10 @@ fn dispatch(state: &Path, config: &Config, request: &Request) -> Result<Value> {
         "terminal.status" => "pty.status",
         "terminal.resize" => "pty.resize",
         "terminal.close" => "pty.close",
+        "containers.list" => "ct.list",
+        "containers.logs" => "ct.logs",
+        "containers.action" => "ct.action",
+        "monitor.stats" => "sys.stats",
         _ => bail!("unsupported fleet dispatch"),
     };
     if method == "runner.start" {
@@ -796,6 +820,7 @@ fn dispatch(state: &Path, config: &Config, request: &Request) -> Result<Value> {
             &request.method,
             method,
             Value::Object(remote),
+            &relay,
         )
         .with_context(|| {
             format!("jobId={job_id}; use this same ID to reconcile an uncertain dispatch")
@@ -808,6 +833,7 @@ fn dispatch(state: &Path, config: &Config, request: &Request) -> Result<Value> {
         &request.method,
         method,
         Value::Object(remote),
+        &relay,
     )
 }
 pub(crate) fn attach(state: &Path, config: &Config, params: &Value) -> Result<transport::Stream> {
@@ -818,6 +844,10 @@ pub(crate) fn attach(state: &Path, config: &Config, params: &Value) -> Result<tr
         let (peer, child) = merge::relay_target(&db, supplied)?;
         let mut relayed = params.clone();
         relayed["targetId"] = json!(child);
+        // The Relay Path so far (none when this Master opens the Shell), then this Master.
+        let mut path = params["path"].as_array().cloned().unwrap_or_default();
+        path.push(json!({"id":config.node_id,"label":config.label}));
+        relayed["path"] = json!(path);
         return transport::attach(state, config, &peer, "relay.attach", &relayed);
     }
     let target = if let Ok(target) = target(&db, supplied) {
@@ -838,6 +868,34 @@ pub(crate) fn attach(state: &Path, config: &Config, params: &Value) -> Result<tr
         "E_RUNNER_NOT_INSTALLED: target has no bridge"
     );
     transport::attach(state, config, &target, "pty.attach", params)
+}
+/// Entry 8: the new machine's pairing code, fetched before it is registered. Its host key isn't known yet, so it is
+/// read first (ssh-keyscan) and used for this one connection; the pairing code must carry that same key, and the
+/// person compares the 6 digits derived from it with the new machine's screen, which catches a machine in the middle.
+/// `None` while Approve isn't finished. Only a direct route can be used (no jump host yet).
+pub(crate) fn fetch_receipt(state: &Path, config: &Config, bundle: &Value, request_id: &str) -> Result<Option<(String, String)>> {
+    let bundle: Bundle = serde_json::from_value(bundle.clone())?;
+    let route = bundle.routes.iter().find(|r| r.proxy_jump.is_none()).context("E_PAIRING_ROUTE: no direct route to fetch the code")?;
+    let scan = quiet_command("ssh-keyscan")
+        .args(["-T", "5", "-t", "ed25519", "-p", &route.port.to_string(), &route.address])
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    let key = String::from_utf8_lossy(&scan.stdout).lines().filter(|l| !l.starts_with('#'))
+        .find_map(|l| { let mut f = l.split_whitespace(); f.next()?; Some(format!("{} {}", f.next()?, f.next()?)) })
+        .context("E_ROUTE: the new machine didn't answer on SSH yet")?;
+    let windows = bundle.os == "windows";
+    let target = Target {
+        schema_version: 2, id: bundle.target_id.clone(), node_id: "00000000-0000-0000-0000-000000000000".into(), label: bundle.target_id.clone(),
+        tenant: bundle.tenant.clone(), os: bundle.os.clone(), user: bundle.user.clone(), host_keys: vec![key.clone()], routes: vec![route.clone()],
+        bridge_path: if windows { "C:\\Program Files\\SSH Control Center\\sshcc.exe".into() } else { "/usr/bin/sshcc".into() }, runner_installed: true,
+    };
+    let reply = transport::request(state, config, &target, "pairing.receipt", json!({"requestId":request_id}))?;
+    Ok(reply["code"].as_str().filter(|_| reply["ready"] == true).map(|code| (code.to_owned(), key)))
+}
+/// One direct host's `system.status` over SSH (its version, roles…): what an update waits for.
+pub(crate) fn system_status(state: &Path, config: &Config, id: &str) -> Result<Value> {
+    let target = target(&database(state)?, id)?;
+    transport::request(state, config, &target, "system.status", json!({}))
 }
 /// None means the request belongs to the local runtime rather than the fleet.
 pub fn handle(state: &Path, config: &Config, req: &Request) -> Result<Option<Value>> {
@@ -862,7 +920,7 @@ pub fn handle(state: &Path, config: &Config, req: &Request) -> Result<Option<Val
                 .iter()
                 .map(serde_json::to_value)
                 .collect::<serde_json::Result<Vec<_>>>()?;
-            rows.extend(merge::merged_targets(&db, &direct)?);
+            rows.extend(merge::merged_targets(&db, &direct, &config.node_id)?);
             json!(rows)
         }
         "targets.import" | "targets.update" => {
@@ -900,6 +958,8 @@ pub fn handle(state: &Path, config: &Config, req: &Request) -> Result<Option<Val
             let id = str_arg(&req.params, "targetId")?;
             let changed = database(state)?.execute("DELETE FROM targets WHERE id=?1", [id])?;
             ensure!(changed > 0, "unknown target");
+            crate::folders::forget(state, id)?;
+            crate::tags::forget(state, id)?;
             json!({"id":id,"removed":true})
         }
         "targets.doctor" => {
@@ -913,12 +973,23 @@ pub fn handle(state: &Path, config: &Config, req: &Request) -> Result<Option<Val
             }
         }
         "jobs.start" | "jobs.list" | "jobs.status" | "jobs.logs" | "jobs.cancel" | "files.list"
-        | "files.read" | "files.search" | "files.grep" | "files.write" | "files.mkdir"
+        | "files.read" | "files.search" | "files.grep" | "files.write" | "files.upload" | "files.mkdir"
         | "files.remove" | "terminal.open"
         | "terminal.read" | "terminal.write" | "terminal.status" | "terminal.resize"
         | "terminal.close" => {
             role(config, "master")?;
             dispatch(state, config, req)?
+        }
+        "containers.list" | "containers.logs" | "containers.action" | "monitor.stats" => {
+            if req.params.get("targetId").and_then(Value::as_str).is_some() {
+                role(config, "master")?;
+                dispatch(state, config, req)?
+            } else if req.method == "monitor.stats" {
+                crate::monitor::handle("sys.stats", &req.params)?
+            } else {
+                // No targetId: the machine this service runs on, e.g. the current Master.
+                crate::containers::handle(&req.method.replacen("containers.", "ct.", 1), &req.params)?
+            }
         }
         _ => return merge::handle_local(state, config, req),
     };

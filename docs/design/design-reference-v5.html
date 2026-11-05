@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SSH Control — Engraved</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@200;300;700;900&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#5A12FF}
+a{color:#9CFF57}a:hover{color:#FFFFFF}
+.eng{background:repeating-linear-gradient(180deg,transparent 0 2px,#5A12FF 2px 4px),linear-gradient(180deg,#FFFFFF 0%,#F1EDFF 38%,#B9A8FF 52%,#FFFFFF 60%,#9CFF57 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.rays{position:absolute;inset:0;background:repeating-conic-gradient(from 0deg at 50% 50%,rgba(255,255,255,.7) 0deg .3deg,transparent .3deg 2.4deg);-webkit-mask:radial-gradient(circle,transparent 0 30%,#000 31%,#000 52%,transparent 70%);mask:radial-gradient(circle,transparent 0 30%,#000 31%,#000 52%,transparent 70%)}
+.rays-g{position:absolute;inset:0;background:repeating-conic-gradient(from 1deg at 50% 50%,#9CFF57 0deg .5deg,transparent .5deg 12deg);-webkit-mask:radial-gradient(circle,transparent 0 44%,#000 45%,#000 62%,transparent 80%);mask:radial-gradient(circle,transparent 0 44%,#000 45%,#000 62%,transparent 80%)}
+.sphere{position:absolute;border-radius:50%;background:repeating-linear-gradient(0deg,#FFFFFF 0 1.3px,transparent 1.3px 5px);-webkit-mask:radial-gradient(circle at 34% 28%,#000 0 14%,rgba(0,0,0,.75) 32%,rgba(0,0,0,.22) 62%,rgba(0,0,0,.55) 86%,#000 97%,transparent 100%);mask:radial-gradient(circle at 34% 28%,#000 0 14%,rgba(0,0,0,.75) 32%,rgba(0,0,0,.22) 62%,rgba(0,0,0,.55) 86%,#000 97%,transparent 100%)}
+.contour{position:absolute;border-radius:50%;background:repeating-radial-gradient(circle at 34% 28%,rgba(255,255,255,.55) 0 1px,transparent 1px 9px);-webkit-mask:radial-gradient(circle at 60% 70%,#000 0 30%,transparent 70%);mask:radial-gradient(circle at 60% 70%,#000 0 30%,transparent 70%)}
+.holo{background:conic-gradient(from 0deg,#9CFF57,#7CF6FF,#FFFFFF,#FF9CF2,#C3A6FF,#9CFF57)}
+.ring{position:absolute;border-radius:50%;-webkit-mask:radial-gradient(circle,transparent 0 63%,#000 63.4% 66%,transparent 66.4%);mask:radial-gradient(circle,transparent 0 63%,#000 63.4% 66%,transparent 66.4%);animation:spin 20s linear infinite}
+.foil{background:linear-gradient(115deg,#9CFF57 0%,#7CF6FF 22%,#FFFFFF 40%,#FF9CF2 58%,#C3A6FF 76%,#9CFF57 100%);background-size:220% 100%;animation:foil 7s ease-in-out infinite}
+.nav:hover{color:#FFFFFF}
+.btn-w:hover{background:#9CFF57}
+.btn-o:hover{background:#9CFF57;color:#2A0590}
+.row:hover{background:rgba(255,255,255,.07)}
+.nav:focus-visible,.btn-w:focus-visible,.btn-o:focus-visible,.row:focus-visible{outline:2px solid #9CFF57;outline-offset:3px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes foil{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+@media (prefers-reduced-motion:reduce){.ring,.foil{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 1240px; width: 100%; box-sizing: border-box; background: #5A12FF; color: #FFFFFF; font-family: 'Geist', system-ui, sans-serif">
+<div style="max-width: 1440px; margin: 0 auto; box-sizing: border-box; padding: 28px 56px 72px; display: flex; flex-direction: column; gap: 40px">
+
+<header style="display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 24px">
+<nav aria-label="Primary" style="display: flex; flex-wrap: wrap; gap: 8px 40px">
+<sc-for list="{{navL}}" as="n" hint-placeholder-count="3">
+<button class="nav" type="button" onClick="{{n.pick}}" style="{{n.style}}">{{n.label}}</button>
+</sc-for>
+</nav>
+<div style="display: flex; flex-direction: column; align-items: center; line-height: 0.86">
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 300; font-size: 40px; letter-spacing: 0.02em">SSH</span>
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 300; font-size: 40px; letter-spacing: 0.02em">CONTROL</span>
+<span style="margin-top: 10px; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.2em; color: #9CFF57">v4.0 · 2026</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 40px">
+<sc-for list="{{navR}}" as="n" hint-placeholder-count="2">
+<button class="nav" type="button" onClick="{{n.pick}}" style="{{n.style}}">{{n.label}}</button>
+</sc-for>
+<button class="btn-o" type="button" style="height: 48px; padding: 0 20px; border: 1px solid #9CFF57; background: transparent; color: #9CFF57; cursor: pointer; font: 700 18px 'Big Shoulders Display', sans-serif; letter-spacing: 0.14em; transition: background 180ms ease-out, color 180ms ease-out">+ CONNECT</button>
+</div>
+</header>
+
+<section aria-label="Fleet status" style="display: flex; flex-wrap: wrap; gap: 40px; align-items: stretch">
+<div style="flex: 1 1 460px; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 22px">
+<span style="font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.18em; color: #D9CCFF">FIG. 00 — FLEET STATUS</span>
+<h1 style="margin: 0; display: flex; flex-direction: column; line-height: 0.82">
+<span class="eng" style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 900; font-size: 240px; letter-spacing: -0.02em">12/14</span>
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 200; font-size: 96px; letter-spacing: -0.01em">Nodes Online</span>
+</h1>
+<p style="margin: 0; font-size: 19px; line-height: 1.5; color: #EDE6FF; max-width: 520px">Two need you. <span style="color: #9CFF57">db-primary</span> is running at 86% CPU and <span style="color: #9CFF57">legacy-ftp</span> stopped answering 3 hours ago.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<button class="btn-w" type="button" style="height: 56px; padding: 0 24px; border: 0; background: #FFFFFF; color: #3A07C8; cursor: pointer; font: 700 22px 'Big Shoulders Display', sans-serif; letter-spacing: 0.1em; display: flex; align-items: center; gap: 12px; transition: background 180ms ease-out">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square" aria-hidden="true"><path d="M4 17l6-5-6-5"></path><path d="M12 19h8"></path></svg>
+OPEN TERMINAL
+</button>
+<button class="btn-o" type="button" style="height: 56px; padding: 0 24px; border: 1px solid #FFFFFF; background: transparent; color: #FFFFFF; cursor: pointer; font: 700 22px 'Big Shoulders Display', sans-serif; letter-spacing: 0.1em; transition: background 180ms ease-out, color 180ms ease-out">VIEW ALERTS</button>
+</div>
+</div>
+
+<div role="img" aria-label="Fleet map: six nodes around an engraved chrome sphere; db-primary under high load, legacy-ftp offline" style="flex: 1 1 560px; min-width: 0; position: relative; min-height: 640px; background: #6524FF; overflow: hidden">
+<div class="rays"></div>
+<div class="rays-g"></div>
+<div style="position: absolute; left: 50%; top: 50%; width: 520px; height: 520px; margin: -260px 0 0 -260px">
+<div class="ring holo" style="inset: 0"></div>
+</div>
+<div class="sphere" style="left: 50%; top: 50%; width: 300px; height: 300px; margin: -150px 0 0 -150px"></div>
+<div class="contour" style="left: 50%; top: 50%; width: 300px; height: 300px; margin: -150px 0 0 -150px"></div>
+<sc-for list="{{hosts}}" as="h" hint-placeholder-count="6">
+<div style="{{h.markerWrap}}">
+<span style="{{h.marker}}"></span>
+<span style="{{h.markerLabel}}">{{h.name}}</span>
+</div>
+</sc-for>
+<span style="position: absolute; left: 24px; top: 20px; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.18em; color: #E6DDFF">FIG. 01 — FLEET MAP</span>
+<span style="position: absolute; right: 24px; bottom: 20px; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.18em; color: #E6DDFF">SAMPLE DATA</span>
+</div>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start">
+
+<section aria-label="Nodes" style="flex: 999 1 560px; min-width: 0">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid #FFFFFF">
+<h2 style="margin: 0; font-family: 'Big Shoulders Display', sans-serif; font-weight: 300; font-size: 56px; line-height: 1">The Fleet</h2>
+<span style="font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.14em; color: #D9CCFF">06 NODES</span>
+</div>
+<div style="overflow-x: auto">
+<div style="min-width: 600px">
+<sc-for list="{{hosts}}" as="h" hint-placeholder-count="6">
+<button class="row" type="button" onClick="{{h.pick}}" style="{{h.rowStyle}}">
+<span style="{{h.idx}}">{{h.n}}</span>
+<span style="display: flex; flex-direction: column; gap: 2px; text-align: left">
+<span style="{{h.nameStyle}}">{{h.name}}</span>
+<span style="{{h.tagStyle}}">{{h.tag}}</span>
+</span>
+<span style="{{h.ipStyle}}">{{h.ip}}</span>
+<span style="{{h.ipStyle}}">{{h.cpu}}</span>
+<span style="{{h.statusStyle}}">{{h.status}}</span>
+</button>
+</sc-for>
+</div>
+</div>
+</section>
+
+<aside aria-label="Active session" style="flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span style="font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.18em; color: #9CFF57">● LIVE SESSION</span>
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 700; font-size: 44px; line-height: 1">{{sel.name}}</span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 13px; color: #D9CCFF">{{sel.ip}} · {{sel.status}}</span>
+</div>
+<div class="foil" style="width: 96px; height: 96px; flex-shrink: 0; transform: rotate(6deg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: #22036E; box-shadow: 0 0 0 1px rgba(255,255,255,0.6) inset">
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 900; font-size: 22px; line-height: 1">KEY</span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 9px; letter-spacing: 0.14em; font-weight: 500">VERIFIED</span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 9px; letter-spacing: 0.1em">ED25519</span>
+</div>
+</div>
+<div style="background: #22036E; padding: 20px 22px; font-family: 'Geist Mono', monospace; font-size: 13px; line-height: 1.85; color: #EDE6FF; display: flex; flex-direction: column">
+<span><span style="color: #9CFF57">$</span> uptime</span>
+<span style="color: #B9A8FF">up 42 days, load 0.31 0.28 0.25</span>
+<span><span style="color: #9CFF57">$</span> systemctl status nginx</span>
+<span style="color: #B9A8FF">nginx.service — <span style="color: #9CFF57">active (running)</span></span>
+<span><span style="color: #9CFF57">$</span> <span style="display: inline-block; width: 9px; height: 16px; vertical-align: -3px; background: #9CFF57"></span></span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid #FFFFFF; border-bottom: 1px solid #FFFFFF">
+<div style="padding: 14px 0; display: flex; flex-direction: column; gap: 2px">
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 700; font-size: 36px; line-height: 1">05</span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.12em; color: #D9CCFF">SESSIONS</span>
+</div>
+<div style="padding: 14px 0 14px 16px; border-left: 1px solid rgba(255,255,255,0.35); display: flex; flex-direction: column; gap: 2px">
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 700; font-size: 36px; line-height: 1">38<span style="font-weight: 300; font-size: 22px">ms</span></span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.12em; color: #D9CCFF">LATENCY</span>
+</div>
+<div style="padding: 14px 0 14px 16px; border-left: 1px solid rgba(255,255,255,0.35); display: flex; flex-direction: column; gap: 2px">
+<span style="font-family: 'Big Shoulders Display', sans-serif; font-weight: 700; font-size: 36px; line-height: 1; color: #9CFF57">01</span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.12em; color: #D9CCFF">KEY EXPIRING</span>
+</div>
+</div>
+</aside>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+  constructor(p){ super(p); this.state = { nav: 'NODES', host: 'api-prod-01' }; }
+  renderVals() {
+    const GREEN = '#9CFF57', AMBER = '#FFD84D', PINK = '#FF9CB8';
+    const mkNav = (label) => {
+      const on = this.state.nav === label;
+      return {
+        label,
+        pick: () => this.setState({ nav: label }),
+        style: 'height:44px;padding:0;border:0;background:transparent;cursor:pointer;font:500 20px \'Big Shoulders Display\',sans-serif;letter-spacing:0.16em;color:' + (on ? '#FFFFFF' : '#CDBEFF') + ';box-shadow:' + (on ? 'inset 0 -2px 0 ' + GREEN : 'none')
+      };
+    };
+    const navL = ['NODES', 'SESSIONS', 'KEYS'].map(mkNav);
+    const navR = ['TUNNELS', 'LOGS'].map(mkNav);
+    const st = { online: { t: 'ONLINE', c: '#FFFFFF' }, busy: { t: 'HIGH LOAD', c: AMBER }, down: { t: 'OFFLINE', c: PINK } };
+    const raw = [
+      { name: 'api-prod-01', tag: 'production · api', ip: '192.0.2.12', cpu: 41, s: 'online', x: 74, y: 22 },
+      { name: 'api-prod-02', tag: 'production · api', ip: '192.0.2.13', cpu: 38, s: 'online', x: 84, y: 48 },
+      { name: 'db-primary', tag: 'production · database', ip: '192.0.2.5', cpu: 86, s: 'busy', x: 18, y: 26 },
+      { name: 'worker-batch', tag: 'staging · jobs', ip: '192.0.2.20', cpu: 22, s: 'online', x: 30, y: 82 },
+      { name: 'edge-sg-1', tag: 'edge · singapore', ip: '172.16.8.3', cpu: 17, s: 'online', x: 72, y: 82 },
+      { name: 'legacy-ftp', tag: 'archive', ip: '192.0.2.9', cpu: 0, s: 'down', x: 12, y: 58 }
+    ];
+    const hosts = raw.map((h, i) => {
+      const on = this.state.host === h.name;
+      const ink = on ? '#2A0590' : '#FFFFFF';
+      const sub = on ? '#3A1A9A' : '#D9CCFF';
+      return {
+        ...h,
+        n: String(i + 1).padStart(2, '0'),
+        cpu: h.s === 'down' ? '— CPU' : h.cpu + '% CPU',
+        status: st[h.s].t,
+        pick: () => this.setState({ host: h.name }),
+        rowStyle: 'display:grid;grid-template-columns:44px 2fr 1.3fr 1fr 1fr;gap:16px;align-items:center;width:100%;min-height:68px;padding:10px 12px;border:0;border-bottom:1px solid rgba(255,255,255,0.35);cursor:pointer;font:inherit;text-align:left;color:' + ink + ';background:' + (on ? GREEN : 'transparent'),
+        idx: 'font-family:\'Geist Mono\',monospace;font-size:12px;color:' + sub,
+        nameStyle: 'font-family:\'Big Shoulders Display\',sans-serif;font-weight:700;font-size:26px;line-height:1;letter-spacing:0.01em;color:' + ink,
+        tagStyle: 'font-size:12px;color:' + sub,
+        ipStyle: 'font-family:\'Geist Mono\',monospace;font-size:13px;color:' + ink,
+        statusStyle: 'font-family:\'Big Shoulders Display\',sans-serif;font-weight:700;font-size:18px;letter-spacing:0.14em;color:' + (on ? '#2A0590' : st[h.s].c),
+        markerWrap: 'position:absolute;left:' + h.x + '%;top:' + h.y + '%;display:flex;align-items:center;gap:8px;transform:translate(-7px,-7px)',
+        marker: 'width:' + (on ? 18 : 12) + 'px;height:' + (on ? 18 : 12) + 'px;background:' + (on ? GREEN : st[h.s].c) + ';outline:' + (on ? '1px solid #FFFFFF' : 'none') + ';outline-offset:4px',
+        markerLabel: 'font-family:\'Geist Mono\',monospace;font-size:11px;letter-spacing:0.08em;padding:3px 6px;color:' + (on ? '#2A0590' : '#FFFFFF') + ';background:' + (on ? GREEN : 'rgba(42,5,144,0.55)')
+      };
+    });
+    const cur = raw.find((h) => h.name === this.state.host) || raw[0];
+    return { navL, navR, hosts, sel: { name: cur.name, ip: cur.ip, status: st[cur.s].t } };
+  }
+}
+</script>
+</body>
+</html>

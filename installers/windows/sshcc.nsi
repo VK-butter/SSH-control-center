@@ -59,6 +59,13 @@ Function .onInit
     StrCpy $ConsoleMode "1"
   ${EndIf}
   ClearErrors
+  ${GetOptions} $Parameters "/UPDATE" $0
+  ${IfNot} ${Errors}
+    ; Pushed by a Master (entry 8): update in place, no window, keep the host's state.
+    StrCpy $BootstrapFlags "$BootstrapFlags -Update"
+    StrCpy $ConsoleMode "1"
+  ${EndIf}
+  ClearErrors
   ${GetOptions} $Parameters "/INSPECT" $0
   ${IfNot} ${Errors}
     StrCpy $BootstrapFlags "$BootstrapFlags -InspectOnly"

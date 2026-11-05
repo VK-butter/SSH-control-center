@@ -1,7 +1,9 @@
 use crate::{
+    activity, backup,
     config::{self, Config},
+    containers,
     executor::Executor,
-    files, fleet, ipc,
+    files, fleet, folders, ipc,
     jobs::Jobs,
     pairing,
     protocol::{self, Request, Response},
@@ -29,7 +31,12 @@ pub struct Service {
     executor: Arc<Executor>,
     terminals: Arc<Terminals>,
     file_mutation: Mutex<()>,
+    /// Set by a restore: the service exits after replying so the OS starts it again with the restored identity.
+    restart: AtomicBool,
 }
+/// Exit code after a restore. systemd (Restart=on-failure) and the Windows service recovery actions start the
+/// service again, and it loads the restored config.json.
+pub const RESTART_EXIT: i32 = 75;
 impl Service {
     pub fn new(state: PathBuf, stop: Arc<AtomicBool>) -> Result<Self> {
         let config = config::load(&state)?;
@@ -46,6 +53,7 @@ impl Service {
             executor,
             terminals,
             file_mutation: Mutex::new(()),
+            restart: AtomicBool::new(false),
         })
     }
     fn target(&self) -> Result<()> {
@@ -75,17 +83,17 @@ impl Service {
                 &caller,
             )?;
             let remote = fleet::attach(&self.state, &self.config, &req.params)?;
-            return pipe_remote(remote, reader, writer);
+            return pipe_remote(remote, reader, writer, || true);
         }
         if req.params["request"]["method"] == "relay.attach" {
             let master = self.bridge_master(&req, &caller)?;
-            let remote = fleet::relay_attach(
-                &self.state,
-                &self.config,
-                master,
-                &req.params["request"]["params"],
-            )?;
-            return pipe_remote(remote, reader, writer);
+            let params = req.params["request"]["params"].clone();
+            let remote = fleet::relay_attach(&self.state, &self.config, master, &params)?;
+            // The Merge Role is checked again on every frame: a role lowered meanwhile ends the input.
+            let (state, config, master) = (self.state.clone(), self.config.clone(), master.to_owned());
+            return pipe_remote(remote, reader, writer, move || {
+                fleet::stream_allowed(&state, &config, &master, &params).is_ok()
+            });
         }
         anyhow::ensure!(
             req.params["request"]["method"] == "pty.attach",
@@ -167,12 +175,40 @@ impl Service {
         result
     }
     pub fn handle(&self, req: &Request, caller: &str) -> Result<Value> {
+        self.handle_as(req, caller, None)
+    }
+    /// One request from a client that reported its channel (`desktop`, `cli`, `mcp`); the audit log records it.
+    pub fn handle_as(&self, req: &Request, caller: &str, channel: Option<&str>) -> Result<Value> {
+        // A group run keeps its channel for the jobs it starts later.
+        let result = if req.method == "groups.run" {
+            let mut tagged = req.clone();
+            tagged.params["channel"] = json!(channel.unwrap_or("unknown"));
+            self.dispatch(&tagged, caller)
+        } else {
+            self.dispatch(req, caller)
+        };
+        activity::after(&self.state, &self.config, req, caller, channel, &result);
+        result
+    }
+    fn dispatch(&self, req: &Request, caller: &str) -> Result<Value> {
         let owner = caller == self.config.owner || security::is_system(caller);
         if !owner
             && (!self.config.allowed_principals.iter().any(|p| p == caller)
                 || req.method != "bridge.request")
         {
             bail!("E_PERMISSION: this local principal is not authorized");
+        }
+        if req.method == "bridge.request" && req.params["request"]["method"] == "pairing.receipt" {
+            // Entry 8: the Master that this machine just approved asks for its pairing code. It doesn't know this
+            // machine's node ID yet, so only the Master's key is checked (it was authorized at Approve); the code
+            // is public registration data, and only that Master's own code is returned.
+            self.target()?;
+            let master = protocol::string(&req.params, "masterId")?;
+            if !fleet::authorized_master_key(&self.state, master, protocol::string(&req.params, "masterKey")?)? {
+                bail!("E_PERMISSION: master is not enrolled or has been revoked");
+            }
+            let id = req.params["request"]["params"]["requestId"].as_str().unwrap_or_default();
+            return pairing::stored_receipt(&self.state, master, id);
         }
         if req.method == "bridge.request" {
             let master = self.bridge_master(req, caller)?;
@@ -208,6 +244,7 @@ impl Service {
                 "fs.search",
                 "fs.grep",
                 "fs.write",
+                "fs.upload",
                 "fs.mkdir",
                 "fs.remove",
                 "pty.open",
@@ -218,6 +255,10 @@ impl Service {
                 "pty.close",
                 "pty.attach",
                 "pty.detach",
+                "ct.list",
+                "ct.logs",
+                "ct.action",
+                "sys.stats",
             ];
             if !allowed.contains(&inner.method.as_str()) {
                 bail!("E_PERMISSION: method is not available over bridge");
@@ -232,18 +273,49 @@ impl Service {
             }
             return self.local(&inner);
         }
-        if req.method.starts_with("targets.")
+        if (req.method.starts_with("targets.")
             || req.method.starts_with("jobs.")
             || req.method.starts_with("files.")
             || req.method.starts_with("terminal.")
             || req.method == "enrollment.export"
-            || req.method.starts_with("pairing.")
+            || req.method.starts_with("pairing."))
+            && !self.config.roles.iter().any(|r| r == "master")
         {
-            if !self.config.roles.iter().any(|r| r == "master") {
-                bail!("E_ROLE: master role is required");
+            bail!("E_ROLE: master role is required");
+        }
+        if let Some(value) = backup::handle(&self.state, &self.config, req, owner)? {
+            if req.method == "backup.restore" {
+                self.restart.store(true, Ordering::SeqCst);
+            }
+            return Ok(value);
+        }
+        if req.method.starts_with("keys.") {
+            if !owner {
+                bail!("E_BACKUP_NOT_OWNER: only this Master's Owner can change its keys");
+            }
+            if let Some(value) = fleet::rotation::handle(&self.state, &self.config, req)? {
+                return Ok(value);
             }
         }
+        if let Some(value) = crate::upgrade::handle(&self.state, &self.config, req)? {
+            return Ok(value);
+        }
+        if let Some(value) = crate::alarms::handle(&self.state, &self.config, req)? {
+            return Ok(value);
+        }
+        if let Some(value) = activity::handle(&self.state, &self.config, req, owner)? {
+            return Ok(value);
+        }
         if let Some(value) = pairing::handle(&self.state, &self.config, req)? {
+            return Ok(value);
+        }
+        if let Some(value) = crate::groups::handle(&self.state, &self.config, req)? {
+            return Ok(value);
+        }
+        if let Some(value) = crate::tags::handle(&self.state, &self.config, req)? {
+            return Ok(value);
+        }
+        if let Some(value) = folders::handle(&self.state, &self.config, req)? {
             return Ok(value);
         }
         if let Some(value) = fleet::handle(&self.state, &self.config, req)? {
@@ -352,7 +424,7 @@ impl Service {
             }
             name if name.starts_with("fs.") => {
                 self.target()?;
-                let _mutation = if matches!(name, "fs.write" | "fs.mkdir" | "fs.remove") {
+                let _mutation = if matches!(name, "fs.write" | "fs.upload" | "fs.mkdir" | "fs.remove") {
                     Some(self.file_mutation.lock().unwrap())
                 } else {
                     None
@@ -363,6 +435,9 @@ impl Service {
                     files::handle(name, &req.params)
                 }
             }
+            // Containers belong to the machine, not a role: a Master lists its own too.
+            name if name.starts_with("ct.") => containers::handle(name, &req.params),
+            name if name.starts_with("sys.") => crate::monitor::handle(name, &req.params),
             name if name.starts_with("pty.") => {
                 self.target()?;
                 let guard = self.installing.lock().unwrap();
@@ -383,18 +458,20 @@ impl Service {
         }
     }
 }
-/// Forward client frames to a remote terminal stream and its replies back until it ends.
+/// Forward client frames to a remote terminal stream and its replies back until it ends. A frame `allow` refuses
+/// detaches the stream instead of being forwarded.
 fn pipe_remote(
     mut remote: fleet::RemoteStream,
     mut reader: BufReader<ipc::Connection>,
     mut writer: ipc::Connection,
+    allow: impl Fn() -> bool + Send + 'static,
 ) -> Result<()> {
     ipc::reply(&mut writer, &remote.initial)?;
     let remote_input = remote.input.take().unwrap();
     std::thread::spawn(move || {
         let mut input = remote_input;
         while let Ok(frame) = protocol::read_frame::<Request>(&mut reader) {
-            if protocol::write_frame(&frame, &mut input).is_err() {
+            if !allow() || protocol::write_frame(&frame, &mut input).is_err() {
                 break;
             }
         }
@@ -442,6 +519,32 @@ pub fn run(stop: Arc<AtomicBool>) -> Result<()> {
         }
     }
     let service = Arc::new(Service::new(state, stop.clone())?);
+    // Change keys: hosts that were offline are moved when they come back, with no window open.
+    {
+        let (service, stop) = (service.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if fleet::rotation::retry_due(&service.state).unwrap_or(false) {
+                    fleet::rotation::pass_in_background(&service.state, &service.config);
+                }
+                if service.config.roles.iter().any(|r| r == "master") {
+                    if let Err(error) = activity::daily(&service.state, chrono::Utc::now()) {
+                        eprintln!("SSH Control Center: activity cleanup failed: {error:#}");
+                    }
+                    // Health alarms: a pass when the interval is due (a memory check between passes), in its own
+                    // thread so a slow host never holds the timer.
+                    let (state, config) = (service.state.clone(), service.config.clone());
+                    if crate::alarms::due(&state, &config, chrono::Utc::now()) { std::thread::spawn(move || {
+                        let ask = |host: &serde_json::Value, what| crate::alarms::real_ask(&state, &config, host, what);
+                        if let Err(error) = crate::alarms::tick(&state, &config, chrono::Utc::now(), &ask) {
+                            eprintln!("SSH Control Center: alarm check failed: {error:#}");
+                        }
+                    }); }
+                }
+            }
+        });
+    }
     let connections = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::SeqCst) {
         let mut connection = listener.accept()?;
@@ -490,13 +593,16 @@ pub fn run(stop: Arc<AtomicBool>) -> Result<()> {
             let _guard = ConnectionGuard(connections);
             let result = (|| -> Result<Option<Value>> {
                 let mut reader = BufReader::new(connection.try_clone()?);
-                let req: Request = protocol::read_frame(&mut reader)?;
+                // The channel rides beside the request: older clients send none.
+                let frame: Value = protocol::read_frame(&mut reader)?;
+                let channel = frame["channel"].as_str().map(str::to_owned);
+                let req: Request = serde_json::from_value(frame).map_err(|_| anyhow::anyhow!("E_PROTOCOL: malformed request"))?;
                 let caller = ipc::peer(&connection)?;
                 if matches!(req.method.as_str(), "terminal.attach" | "bridge.stream") {
                     service.serve_stream(req, caller, reader, connection.try_clone()?)?;
                     return Ok(None);
                 }
-                Ok(Some(service.handle(&req, &caller)?))
+                Ok(Some(service.handle_as(&req, &caller, channel.as_deref())?))
             })();
             if let Ok(None) = result {
             } else {
@@ -505,9 +611,18 @@ pub fn run(stop: Arc<AtomicBool>) -> Result<()> {
                     &Response::from_result(result.map(|v| v.unwrap())),
                 );
             }
+            // Only after the restore's reply is written.
+            if service.restart.load(Ordering::SeqCst) {
+                service.stop.store(true, Ordering::SeqCst);
+                wake();
+            }
         });
     }
     service.jobs.shutdown();
     service.terminals.shutdown();
+    if service.restart.load(Ordering::SeqCst) {
+        eprintln!("SSH Control Center restored from a backup; restarting to load the restored identity");
+        std::process::exit(RESTART_EXIT);
+    }
     Ok(())
 }

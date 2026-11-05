@@ -16,7 +16,9 @@ param(
     [string]$ResultFile,
     [string]$OwnerProfile,
     [ValidateSet('preserve','service','owner-session')][string]$ExecutionMode='preserve',
-    [ValidatePattern('^[a-fA-F0-9-]{36}$')][string]$SetupRunId
+    [ValidatePattern('^[a-fA-F0-9-]{36}$')][string]$SetupRunId,
+    # An update pushed by a Master (a SYSTEM task, nobody at the screen): keep everything, ask nothing.
+    [switch]$Unattended
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -202,7 +204,7 @@ if ($ExecutionMode -eq 'preserve') {
     }else{'owner-session'}
 }
 Write-SetupProgress 0 ('บัญชีสำหรับงาน: '+$Owner+' | '+$ExecutionMode+' | '+ $(if($ExecutionMode -eq 'owner-session'){'administrator; ต้อง login อยู่'}else{'SYSTEM'}))
-if($ExecutionMode -eq 'owner-session' -and $ownerSid -ne $invokingOwnerSid){
+if($ExecutionMode -eq 'owner-session' -and $ownerSid -ne $invokingOwnerSid -and -not $Unattended){
     Add-Type -AssemblyName System.Windows.Forms
     $approval=[Windows.Forms.MessageBox]::Show(('บัญชี Owner เดิม: '+$Owner+[Environment]::NewLine+'Jobs, files และ terminal จะใช้บัญชีนี้พร้อมสิทธิ์ administrator ขณะ login อยู่'),'ยืนยันบัญชีสำหรับงาน','YesNo','Question')
     if($approval -ne 'Yes'){throw 'ยกเลิกการเปลี่ยนโหมด Owner session'}

@@ -1,0 +1,115 @@
+/* The Inventory sky (DESIGN.md "Relic Night"): a black sky that keeps local time over the Stardust Halo.
+   sky.js builds it once and only updates it; every moving part animates transform or opacity. */
+@font-face { font-family: "Cormorant Garamond"; src: url("fonts/cormorant-italic.woff2") format("woff2"); font-weight: 300 700; font-style: italic; font-display: swap; }
+@font-face { font-family: "Space Mono"; src: url("fonts/space-mono.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+/* Cormorant ships old-style figures only (11 reads as II); its digits come from Fraunces. */
+@font-face { font-family: "Sky Digits"; src: url("fonts/fraunces.woff2") format("woff2"); font-weight: 100 900; unicode-range: U+0030-0039; font-display: swap; }
+
+body {
+  /* written by sky.js once a minute; the plate and the sidebar both read them */
+  --sky0: #04050C; --sky1: #0A0C1E; --sky2: #151A3C; --sky3: #26305E; --glow: #6C7CFF; --gs: .2; --stars: 1; --rays: 0; --ridge-far: #0C0F22;
+  /* the plate's film grain at its strength (.32), for the sidebar's copy of the sky to blend the same way */
+  --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .32 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  --italic: "Sky Digits", "Cormorant Garamond", "Noto Serif Thai", Georgia, serif;
+  --typewriter: "Space Mono", "JetBrains Mono", "Noto Sans Thai Looped", monospace;
+}
+
+.sky { position: relative; height: 100vh; min-height: 560px; max-height: 980px; overflow: hidden; isolation: isolate; user-select: none;
+  /* the prototype's night: deep blue to violet, an ember haze where the halo sits */
+  background: radial-gradient(60% 70% at 56% 50%, rgba(240, 160, 96, .22), rgba(240, 160, 96, 0) 70%),
+    linear-gradient(180deg, #05071A 0%, #16204A 55%, #2A3566 80%, #0B0D1A 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 30px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 30px), transparent); }
+.sky[hidden] { display: none; }
+.sky > * { position: absolute; }
+
+/* As the prototype: scattered stars (sky.js draws them once), a vignette and film grain over the plate */
+.sky-stars { inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.sky-vignette { inset: 0; z-index: 2; pointer-events: none; background: radial-gradient(130% 100% at 30% 42%, transparent 58%, rgba(2, 3, 8, .75)); }
+.sky-grain { inset: 0; z-index: 6; pointer-events: none; opacity: .32; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+.sky-hint { right: 36px; bottom: 34px; z-index: 5; margin: 0; font: 400 10px/1 var(--typewriter); letter-spacing: .24em; text-transform: uppercase; color: var(--lilac); pointer-events: none; }
+
+/* The Stardust Halo (sky.js draws it): the far half behind the near ridge, the near half and its bloom in front.
+   Drag turns it; a spark under the pointer is a host. */
+.sky-halo { top: 0; bottom: 0; left: -24px; width: calc(100% + 48px); height: 100%; pointer-events: none; }
+.sky-halo.bloom { filter: blur(14px) saturate(1.2); opacity: .8; mix-blend-mode: screen; }
+.sky { cursor: grab; touch-action: pan-y; }
+.sky.is-dragging { cursor: grabbing; }
+.sky.is-pointing { cursor: pointer; }
+
+/* Hard parts: film edge with real readouts, registration marks, headline, callout */
+.sky-film { left: 0; right: 0; top: 0; height: 30px; z-index: 5; display: flex; align-items: center; gap: 18px; padding: 0 18px; color: #F4F1F8;
+  background: rgba(5, 6, 14, .72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 80px); mask-image: linear-gradient(90deg, transparent, #000 80px); }
+.sky-film .frames { flex: 1; display: flex; justify-content: space-between; gap: 18px; overflow: hidden; white-space: nowrap; font: 400 11px/1 var(--typewriter); letter-spacing: .16em; text-transform: uppercase; }
+.sky-film .frames .on { color: var(--steel); }
+
+.sky-headline { left: 40px; bottom: 36px; z-index: 3; margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 14px; max-width: 440px; line-height: 1;
+  /* a soft dark halo keeps the words readable on the brightest horizon (measured at every phase) */
+  text-shadow: 0 0 2px rgba(5, 6, 14, .6), 0 0 30px rgba(5, 6, 14, .9), -1.5px 0 rgba(70, 130, 255, .35), 1.5px 0 rgba(255, 150, 90, .25); }
+/* A soft local scrim under the words: ≥ 7:1 for white at every phase (measured), invisible as a shape */
+.sky-headline::before { content: ""; position: absolute; z-index: -1; left: -60px; right: -80px; top: -50px; bottom: -40px; pointer-events: none;
+  background: radial-gradient(ellipse 50% 50% at 40% 55%, rgba(5, 6, 14, .62), rgba(5, 6, 14, .3) 60%, transparent 100%); }
+.sky-headline .n { font: 900 136px/.8 var(--serif); font-variation-settings: "SOFT" 0, "WONK" 0, "opsz" 144; letter-spacing: -.07em; color: var(--white); }
+.sky-headline .of { font: 700 18px/1 var(--typewriter); letter-spacing: .18em; text-transform: uppercase; color: var(--white); border-top: 3px solid var(--white); padding-top: 6px; transform: translateY(-62px); }
+.sky-headline .on { flex-basis: 100%; margin-top: -6px; font: italic 400 64px/.9 var(--italic); color: var(--white); }
+
+.sky-callout { left: 0; top: 0; z-index: 4; opacity: 0; pointer-events: none; transition: transform 560ms cubic-bezier(.2, .8, .2, 1), opacity 200ms; }
+.sky-callout.is-shown { opacity: 1; }
+.sky-callout .stem { position: absolute; left: 0; bottom: 0; width: 1.5px; height: 64px; background: rgba(238, 240, 248, .7); }
+.sky-callout .stem::before { content: ""; position: absolute; left: -5px; bottom: -5px; width: 9px; height: 9px; border: 1.5px solid rgba(238, 240, 248, .8); background: var(--deep); }
+.sky-callout .stem::after { content: ""; position: absolute; left: 0; top: 0; width: 28px; height: 1.5px; background: rgba(238, 240, 248, .7); }
+.sky-callout .body { position: absolute; left: 36px; bottom: 50px; white-space: nowrap; padding: 14px 20px 16px; color: #F4F1F8;
+  background: rgba(10, 11, 24, .72); -webkit-backdrop-filter: blur(10px) saturate(1.3); backdrop-filter: blur(10px) saturate(1.3); outline: 1px solid rgba(238, 240, 248, .16); outline-offset: -6px; }
+.sky-callout.down .stem { bottom: auto; top: 0; } .sky-callout.down .stem::before { bottom: auto; top: -5px; } .sky-callout.down .stem::after { top: auto; bottom: 0; } .sky-callout.down .body { bottom: auto; top: 50px; }
+.sky-callout.left .stem::after { left: auto; right: 0; } .sky-callout.left .body { left: auto; right: 36px; text-align: right; } .sky-callout.left .state { justify-content: flex-end; }
+.sky-callout .name { display: block; font: 600 32px/.95 var(--serif); font-variation-settings: "SOFT" 0, "WONK" 0, "opsz" 144; letter-spacing: -.02em; text-shadow: -1.5px 0 rgba(70, 130, 255, .4), 1.5px 0 rgba(255, 150, 90, .3); }
+.sky-callout .state { display: flex; align-items: center; gap: 8px; margin-top: 6px; font: 700 12px/1 var(--display); letter-spacing: .16em; text-transform: uppercase; }
+.sky-callout .state::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--lilac)); }
+.sky-callout dl { display: grid; grid-template-columns: auto auto; gap: 4px 14px; margin: 10px 0 0; font: 400 12px/1.3 var(--mono); }
+.sky-callout dt { color: #B9B4D6; text-transform: uppercase; letter-spacing: .14em; font-size: 11px; }
+.sky-callout dd { margin: 0; }
+
+.sky-star { width: 260px; height: 2px; border-radius: 2px; transform-origin: 0 50%; opacity: 0; pointer-events: none;
+  background: linear-gradient(90deg, #fff, rgba(242, 180, 138, .7) 18%, rgba(236, 234, 246, .25) 60%, transparent); }
+.sky-star::before { content: ""; position: absolute; left: -3px; top: -2px; width: 6px; height: 6px; border-radius: 50%; background: #fff; }
+
+/* Parallax layers glide; sky.js writes `translate` once per pointer move */
+.sky :is(.sky-stars, .sky-halo, .sky-callout) { transition-property: translate, opacity, transform; transition-duration: 900ms, 3s, 560ms; transition-timing-function: cubic-bezier(.2, .7, .2, 1), ease-in-out, cubic-bezier(.2, .8, .2, 1); }
+
+/* The sky continues under the sidebar down to the hill, which meets the plate's left edge at --hill-y (sky.js) */
+body.has-sky .app-side { isolation: isolate; }
+body.has-sky .app-side { overflow-x: hidden; }
+body.has-sky .app-side::after { content: ""; position: absolute; z-index: -2; left: 0; right: 0; top: 0; height: max(560px, min(100vh, 980px)); pointer-events: none; transform: translateY(var(--scroll, 0px));
+  background: var(--grain) 0 0 / 200px 200px, var(--side-stars, none) 0 0 / 100% 100% no-repeat,
+    radial-gradient(var(--haze-rx, 700px) var(--haze-ry, 600px) at var(--haze-x, 900px) var(--haze-y, 450px), rgba(240, 160, 96, .22), rgba(240, 160, 96, 0) 70%),
+    linear-gradient(180deg, #05071A 0%, #16204A 55%, #2A3566 80%, #0B0D1A 100%);
+  background-blend-mode: overlay, normal, normal, normal;
+  background-position: 0 0, var(--sx, 0px) var(--sy, 0px), 0 0, 0 0; transition: background-position 900ms cubic-bezier(.2, .7, .2, 1); }
+/* …and the hill carries on under it in the canvas hill's colours, so nothing steps at the edge */
+body.has-sky .app-side::before { content: ""; position: absolute; z-index: -1; left: -24px; right: -24px; top: 0; height: max(560px, min(100vh, 980px)); pointer-events: none;
+  transform: translateY(var(--scroll, 0px)); background: var(--grain) 0 0 / 200px 200px, linear-gradient(180deg, #10101A var(--hill-y, 70%), #06060B 100%); background-blend-mode: overlay, normal;
+  clip-path: polygon(0 var(--hill-l, 74%), 100% var(--hill-r, 70%), 100% 100%, 0 100%);
+  /* it bleeds 24 px past both edges and moves with the plate's hill, so the parallax never opens the seam */
+  translate: var(--hx, 0px) var(--hy, 0px); transition: translate 900ms cubic-bezier(.2, .7, .2, 1); }
+/* No scrim over the sidebar's sky (it would step at the edge): its words carry a dark halo instead */
+body.has-sky .app-side :is(.dc-item, .side-foot) { text-shadow: 0 0 6px rgba(4, 5, 12, .95), 0 0 14px rgba(4, 5, 12, .8); }
+
+
+html:lang(th) .sky-film .frames, html:lang(th) .sky-hint, html:lang(th) .sky-headline .of, html:lang(th) .sky-callout :is(.state, dt) { letter-spacing: 0; }
+html:lang(th) .sky-headline .on { font: 500 52px/1.2 var(--serif); }
+
+/* Every other page: a thin strip of the same sky across the top, continuous under the sidebar (DESIGN.md layout 4).
+   Kept faint so a page heading and its lead line stay ≥ 7:1 at every phase. */
+body:not(.has-sky) .app-main { position: relative; isolation: isolate; }
+body:not(.has-sky) .app-main::before, body:not(.has-sky) .app-side::after { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: 0; height: 150px; pointer-events: none;
+  transform: translateY(var(--strip-scroll, 0px));
+  background: radial-gradient(circle, rgba(236, 238, 248, .5) 0 .8px, transparent 1.2px) 0 0 / 37px 41px,
+    radial-gradient(circle, rgba(180, 200, 255, .4) 0 .7px, transparent 1.1px) 13px 19px / 53px 47px,
+    linear-gradient(180deg, var(--sky0) 0%, var(--sky1) 40%, color-mix(in srgb, var(--sky2) 40%, transparent) 72%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent); mask-image: linear-gradient(180deg, #000 55%, transparent); }
+body:not(.has-sky) .app-side { isolation: isolate; --strip-scroll: var(--scroll, 0px); }
+/* "เครื่องออนไลน์" runs wider than "online." and reaches the glow behind this Master: a wider, denser scrim keeps 7:1 */
+html:lang(th) .sky-headline { max-width: 520px; }
+html:lang(th) .sky-headline::before { right: -170px; bottom: -50px;
+  background: radial-gradient(ellipse 58% 55% at 45% 60%, rgba(5, 6, 14, .78), rgba(5, 6, 14, .42) 60%, transparent 100%); }

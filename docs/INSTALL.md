@@ -14,6 +14,17 @@ Ubuntu binaries are /usr/bin/sshcc and, in the optional desktop package, /usr/bi
 
 Intended Target baseline: Windows 10/11 x64 (Windows 10 needs OpenSSH Optional Features), Windows Server 2019/2022/2025, Ubuntu 24.04 x64. The repository's automated tests do not cover every edition listed here; see [VALIDATION.md](VALIDATION.md). Server Core uses service/CLI. Desktop dependencies are optional on Ubuntu. Tailscale is standard IP transport: install/sign in using its ordinary workflow, keep your own ACL/firewall policy, then add the Tailscale address as a route.
 
+## Install from a Release
+
+Releases of this fork are on its [Releases page](https://github.com/bbouq/SSH-control-center/releases). Each one has:
+- `sshcc-VERSION-windows-x64-setup.exe` and `sshcc-VERSION-ubuntu-setup.deb`: the Master installers. Each carries the installer templates for both systems, so a Master can add Windows and Ubuntu hosts.
+- `sshcc_VERSION_amd64.deb` (the service alone) and the thin templates, for building or checking.
+- `SHA256SUMS`: compare each file before installing (`sha256sum -c SHA256SUMS`, or `Get-FileHash` on Windows). The files are unsigned: the checksums show a file wasn't damaged, not who built it.
+
+Install a Master from the setup file for its system (see "Normal installation and pairing" below). Targets need no download: the Master builds each host's installer from the templates it carries, so a new host gets the Master's version. A host on an older version shows "Needs update" on the Master, and **Update** sends it the new version over SSH. A Master is updated by installing the newer Release over it; it never checks the internet by itself.
+
+Releases are built by `.github/workflows/release.yml` from a `v*` tag, with the same steps as "Build packages" below.
+
 ## Build packages
 
 A machine that only runs an installed package does not need Rust, NSIS or Linux build tools. Whoever builds the packages needs Rust 1.90+, native compilers, NSIS on Windows and Tauri desktop dependencies on Ubuntu 24.04. A full Master package needs both a Windows build host and an Ubuntu 24.04 x86_64 build host, because both full Master installers embed both thin templates (steps 3 and 5 copy files between the two hosts). This repository ships no prebuilt installers: you build them with the steps below, and they are written to `dist/`. Build thin templates first to avoid recursively embedding installers:
@@ -28,18 +39,18 @@ A published thin template must stay byte-identical after generating its manifest
 
 ## Normal installation and pairing
 
-The generic installers named below, `sshcc-0.4.0-windows-x64-setup.exe` and `sshcc-0.4.0-ubuntu-setup.deb`, are the files that the "Build packages" steps write to `dist/`. No prebuilt downloads are provided. For a guided walkthrough, follow [pairing.md](pairing.md) (English) or [QUICKSTART.th.md](QUICKSTART.th.md) (Thai).
+The generic installers named below, `sshcc-0.5.2-windows-x64-setup.exe` and `sshcc-0.5.2-ubuntu-setup.deb`, are the files that the "Build packages" steps write to `dist/`. No prebuilt downloads are provided. For a guided walkthrough, follow [pairing.md](pairing.md) (English) or [QUICKSTART.th.md](QUICKSTART.th.md) (Thai).
 
-On Windows open the generic `sshcc-0.4.0-windows-x64-setup.exe` in the intended Owner's session and choose “ใช้เครื่องนี้เป็นเครื่องหลัก” (Use this machine as the Master). The window has a box “ใช้ Owner session (administrator) สำหรับ jobs, files และ terminal” that is ticked on a fresh install. With it ticked (the default Owner-session mode), the account that opens the file must itself be an administrator, because the Owner needs an elevated token. A different administrator can supply the UAC password only when you clear that box (service mode). Either way, the account that opened the file is the one recorded as Owner. Reinstallation retains the existing owner and node identity.
+On Windows open the generic `sshcc-0.5.2-windows-x64-setup.exe` in the intended Owner's session and choose “ใช้เครื่องนี้เป็นเครื่องหลัก” (Use this machine as the Master). The window has a box “ใช้ Owner session (administrator) สำหรับ jobs, files และ terminal” that is ticked on a fresh install. With it ticked (the default Owner-session mode), the account that opens the file must itself be an administrator, because the Owner needs an elevated token. A different administrator can supply the UAC password only when you clear that box (service mode). Either way, the account that opened the file is the one recorded as Owner. Reinstallation retains the existing owner and node identity.
 
-On Ubuntu install the generic `sshcc-0.4.0-ubuntu-setup.deb`, then open **SSH Control Center Setup** from the application menu. Installing the helper alone does not install/start the actual service or add Master SSH authority. Approval runs the privileged worker. Desktop dependencies/tray are optional; a Server uses the same helper in a terminal:
+On Ubuntu install the generic `sshcc-0.5.2-ubuntu-setup.deb`, then open **SSH Control Center Setup** from the application menu. Installing the helper alone does not install/start the actual service or add Master SSH authority. Approval runs the privileged worker. Desktop dependencies/tray are optional; a Server uses the same helper in a terminal:
 
 ~~~bash
-sudo apt install --no-install-recommends ./sshcc-0.4.0-ubuntu-setup.deb
+sudo apt install --no-install-recommends ./sshcc-0.5.2-ubuntu-setup.deb
 sshcc-setup --terminal
 ~~~
 
-On the Master choose **เพิ่มเครื่อง**, enter name/group/OS/address and save the single tailored EXE/DEB. Open it on the Target, verify the controlling Master and **Approve**, then copy the whole `SSHCC1...` code. Paste it on the Master. If diagnostics fail, the installed Target stays “ติดตั้งแล้ว—รอตรวจการเชื่อมต่อ”; edit its address and retry without reinstallation.
+On the Master choose **เพิ่มเครื่อง**, enter name/group/OS/address and save the single tailored EXE/DEB. Open it on the Target, verify the controlling Master and **Approve**. The new machine then shows a 6-digit number and the Master fetches the pairing code by itself and shows the same number: if they match, click **Yes, same number** on the Master (if they differ, **No, it's different** cancels the pairing; something may be between the two). An installer from before 0.5.0 shows the whole `SSHCC1...` code instead: paste it on the Master. If diagnostics fail, the installed Target stays “ติดตั้งแล้ว—รอตรวจการเชื่อมต่อ”; edit its address and retry without reinstallation.
 
 Windows Server without a desktop launches the same tailored executable using its terminal helper:
 
@@ -72,7 +83,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Setup.ps1 -Role target
 ~~~
 
 ~~~bash
-sudo apt install ./sshcc_0.4.0_amd64.deb
+sudo apt install ./sshcc_0.5.2_amd64.deb
 sudo /usr/lib/sshcc/setup.sh --role target --owner "$USER" --bundle ./bundle.json --registration ./registration.json
 ~~~
 

@@ -48,11 +48,32 @@ def clipboard(code):
     return False
 
 
+def short_code(path):
+    """The 6 digits the Master shows too (entry 8); empty if this build can't compute them."""
+    try:
+        result = subprocess.run([str(ASSETS / "sshcc"), "pairing", "short-code", "--code-file", str(path)],
+                                text=True, capture_output=True, timeout=20)
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
+
 def show_code(path, gui):
     code = path.read_text(encoding="utf-8").strip()
+    digits = short_code(path)
     if not gui:
-        print("\nติดตั้งสำเร็จ — คัดลอกรหัสด้านล่างไปวางที่เครื่องหลัก:\n" + code + "\n")
+        if digits:
+            print("\nติดตั้งสำเร็จ — เทียบเลขนี้กับที่เครื่องหลัก: " + digits +
+                  "\nถ้าตรงกัน กด \"ใช่ ตรงกัน\" ที่เครื่องหลัก · ถ้าเทียบไม่ได้ ใช้รหัสด้านล่างแทน:\n" + code + "\n")
+        else:
+            print("\nติดตั้งสำเร็จ — คัดลอกรหัสด้านล่างไปวางที่เครื่องหลัก:\n" + code + "\n")
         return
+    if digits:
+        answer = dialog("--question", "--title=เทียบเลขกับเครื่องหลัก", "--width=520",
+                        "--text=<big><b>" + digits + "</b></big>\n\nเทียบเลขนี้กับที่หน้าจอเครื่องหลัก ถ้าตรงกัน กด \"ใช่ ตรงกัน\" ที่เครื่องหลัก",
+                        "--ok-label=เสร็จ", "--cancel-label=เทียบไม่ได้? แสดงรหัสแทน")
+        if answer.returncode == 0:
+            return
     while True:
         answer = dialog("--text-info", "--title=พร้อมจับคู่กับเครื่องหลัก",
                         "--filename=" + str(path), "--width=720", "--height=320",

@@ -481,7 +481,7 @@ fn disabled_merge_blocks_join_and_relay_until_allowed_again() {
     fleet::relay_join(&fx.state, &fx.config, &merging).unwrap();
 }
 #[test]
-fn relay_requests_are_one_hop_and_limited_to_fleet_work() {
+fn relay_requests_are_limited_to_fleet_work_and_known_hosts() {
     let fx = Fixture::new();
     let merging = Uuid::new_v4().to_string();
     fleet::relay_join(&fx.state, &fx.config, &merging).unwrap();
@@ -495,7 +495,9 @@ fn relay_requests_are_one_hop_and_limited_to_fleet_work() {
         .unwrap_err()
         .to_string()
     };
-    assert!(relay("peer/child", "jobs.list").contains("relayed targetId"));
+    // Multi-hop IDs are accepted (entry 6) but must be hosts this Master reaches through a merge.
+    assert!(relay("peer/child", "jobs.list").contains("unknown target"));
+    assert!(relay("bad id", "jobs.list").contains("relayed targetId"));
     for method in ["merges.add", "targets.remove", "relays.allow", "masters.revoke"] {
         assert!(relay("child", method).contains("not available over relay"));
     }
@@ -569,7 +571,10 @@ fn composite_dispatch_requires_a_merge_and_a_known_child() {
     )
     .unwrap();
     assert!(start("peer/unknown").contains("sync the merge"));
-    assert!(start("peer/a/b").contains("merged target id"));
+    // A host further away is addressed with more segments (entry 6), but must still be one the merge listed.
+    assert!(start("peer/a/b").contains("sync the merge"));
+    assert!(start("peer/a/b/c/d/e").contains("E_RELAY_TOO_FAR"));
+    assert!(start("peer/a b").contains("relayed targetId"));
     assert!(start("nobody/child-a").contains("unknown target"));
     // Missing managed key stops before networking, proving the relay route was chosen.
     fs::remove_file(fx.state.join("keys/company.ed25519")).unwrap();
@@ -607,6 +612,18 @@ fn pairing_back_requires_an_active_merge_and_the_callers_own_code() {
     }
     fx.call("relays.allow", json!({ "masterId": merging }))
         .unwrap();
+    // A merged Master always knows its own OS; the two-request "unknown" form is local only.
+    let unknown = json!({"os":"unknown","routes":[{"kind":"lan","address":"10.0.0.9","port":22}]});
+    assert!(fleet::relay_pair(&fx.state, &fx.config, &merging, &unknown)
+        .unwrap_err()
+        .to_string()
+        .contains("E_ARGUMENT: os must be windows or linux"));
+    let status = Request {
+        method: "pairing.status".into(),
+        params: json!({}),
+    };
+    let pending = sshcc_core::pairing::handle(&fx.state, &fx.config, &status).unwrap();
+    assert_eq!(pending, Some(json!([])));
     assert!(fleet::relay_pair_complete(&fx.state, &fx.config, &merging, &json!({}))
         .unwrap_err()
         .to_string()
@@ -683,8 +700,12 @@ fn routine_health_reads_the_ssh_banner_without_logging_in() {
     };
     assert_eq!(row("up")["online"], true);
     assert_eq!(row("up")["failures"], 0);
+    assert!(row("up")["latencyMs"].is_u64(), "the banner read is timed");
+    assert_eq!(row("up")["onlineSince"], row("up")["checkedAt"]);
     assert_eq!(row("down")["online"], false);
     assert_eq!(row("down")["failures"], 1);
+    assert_eq!(row("down")["latencyMs"], Value::Null);
+    assert_eq!(row("down")["onlineSince"], Value::Null);
     assert!(row("down")["error"]
         .as_str()
         .unwrap()
@@ -692,6 +713,22 @@ fn routine_health_reads_the_ssh_banner_without_logging_in() {
     // A failing Target backs off; refresh asks over SSH, which fails here without the key.
     let cached = fx.call("fleet.health", json!({})).unwrap();
     assert_eq!(cached, rows);
+    // A later banner check keeps the start of the online run.
+    let db = rusqlite::Connection::open(fx.state.join("fleet.sqlite")).unwrap();
+    db.execute(
+        "UPDATE health SET document=json_set(document,'$.checkedAt','2000-01-01T00:00:00+00:00') WHERE target_id='up'",
+        [],
+    )
+    .unwrap();
+    let again = fx.call("fleet.health", json!({})).unwrap();
+    let up = again
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["targetId"] == "up")
+        .unwrap();
+    assert_ne!(up["checkedAt"], row("up")["checkedAt"]);
+    assert_eq!(up["onlineSince"], row("up")["onlineSince"]);
     let refreshed = fx.call("fleet.health", json!({"refresh":true})).unwrap();
     assert!(refreshed
         .as_array()

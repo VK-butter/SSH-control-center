@@ -67,7 +67,7 @@ pub fn read_frame<T: for<'de> Deserialize<'de>>(reader: &mut impl BufRead) -> Re
     if count > MAX_FRAME || bytes.last() != Some(&b'\n') {
         bail!("E_PROTOCOL: oversized or incomplete frame");
     }
-    Ok(serde_json::from_slice(&bytes).context("E_PROTOCOL: malformed JSON")?)
+    serde_json::from_slice(&bytes).context("E_PROTOCOL: malformed JSON")
 }
 pub fn write_frame(value: &impl Serialize, writer: &mut impl Write) -> Result<()> {
     let bytes = serde_json::to_vec(value)?;

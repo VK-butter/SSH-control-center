@@ -46,6 +46,8 @@ The script's own report lists what it does not cover: real SSH, remote machines,
 
 `two_masters_five_targets`, `five_concurrent_root_build_deploy_jobs`, `atomic_file_transfer_and_hash_conflict`, `ordered_route_fallback`, `client_disconnect_retry_and_master_restart`, `concurrent_master_attribution`, `revoke_and_stale_key_fingerprint`, `pinned_proxy_jump_and_jump_mismatch`, `lost_ssh_reply_fallback_executes_once`, `host_key_mismatch_stops_fallback`, `target_identity_binding`, `target_service_restart_interrupted`, `local_principal_rejection`.
 
+`tests/rotation_e2e.py` uses the same image for Master backup and restore (roadmap entry 3). Two Targets are set up as `installers/ubuntu/setup.sh` does (the forced-command line in `/etc/ssh/sshcc/sshcc-bridge.authorized_keys`). The Master is backed up with `sshcc backup`, removed, and restored with `sshcc restore` on a fresh Master, which must reach the Target with no change on it. Change keys then runs the elevated key change job on the Targets: a second Target is offline at that moment and must be moved on the service's own retry once its SSH is back, with no action. On both, the new key must work, the old key must be refused, and the key file must hold one line for this Master. It does not run the Windows version of the job.
+
 The LAN, Tailscale and public route kinds are labels on a single internal network, so this harness does not test real network policy. It also does not claim systemd boot, Windows SSH, real WAN/Tailscale, desktop performance, signed installers or a physical reboot.
 
 ## 4. Package personalization smoke

@@ -7,6 +7,12 @@ Run from the repository root (Docker is required):
 
 `--output` is any directory the harness may create; it defaults to `artifacts/linux`, which is git-ignored. The harness writes `ssh-e2e-report.json`, one service log per container and a copy of the release CLI there.
 
+Backup, restore and Change keys over real OpenSSH (Targets set up as the Ubuntu installer does):
+
+    python tests/rotation_e2e.py --image sshcc-e2e:local [--keep]
+
+`--keep` leaves the containers running after a failure so they can be inspected.
+
 The Docker build runs the `sshcc-core` Rust tests (`cargo test --locked -p sshcc-core`) and produces a release CLI on Debian 12.
 Runtime fixtures use Ubuntu 24.04 and real OpenSSH, with five Targets and two
 independent Master containers on an internal Docker network. No host services,

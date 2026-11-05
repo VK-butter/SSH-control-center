@@ -97,12 +97,12 @@ pub fn list_links(sshcc: &Path, home: &Path) -> Vec<ClientLink> {
 pub fn connect(client: ClientId, sshcc: &Path, home: &Path) -> Result<ClientLink> {
     let link = inspect(client, sshcc, home);
     if !link.detected {
-        bail!("ไม่พบ {} บนเครื่องนี้ สามารถคัดลอก snippet ได้", client.label());
+        bail!("{} is not installed on this machine; you can copy the snippet", client.label());
     }
     match link.status {
         LinkStatus::Connected => Ok(link),
         LinkStatus::PathMismatch => bail!(
-            "{} มี {} อยู่แล้ว แต่ path ไม่ตรง กด “อัปเดต path” หากต้องการแก้",
+            "{} already has {}, but the path differs; press “Update path” to fix it",
             client.label(),
             SERVER_NAME
         ),
@@ -116,10 +116,10 @@ pub fn connect(client: ClientId, sshcc: &Path, home: &Path) -> Result<ClientLink
 pub fn update_path(client: ClientId, sshcc: &Path, home: &Path) -> Result<ClientLink> {
     let link = inspect(client, sshcc, home);
     if !link.detected {
-        bail!("ไม่พบ {} บนเครื่องนี้", client.label());
+        bail!("{} is not installed on this machine", client.label());
     }
     if link.status != LinkStatus::PathMismatch {
-        bail!("{} ไม่ต้องการอัปเดต path", client.label());
+        bail!("{} does not need a path update", client.label());
     }
     write_registration(client, sshcc, home, true)?;
     Ok(inspect(client, sshcc, home))
@@ -128,14 +128,14 @@ pub fn update_path(client: ClientId, sshcc: &Path, home: &Path) -> Result<Client
 pub fn resolve_sshcc(current_exe: &Path) -> Result<PathBuf> {
     let install = current_exe
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("ไม่พบโฟลเดอร์ที่ติดตั้ง"))?;
+        .ok_or_else(|| anyhow::anyhow!("Installation folder not found"))?;
     #[cfg(windows)]
     let name = "sshcc.exe";
     #[cfg(not(windows))]
     let name = "sshcc";
     let path = install.join(name);
     if !path.is_file() {
-        bail!("ไม่พบ {} ข้างโปรแกรมที่เปิดอยู่", name);
+        bail!("{} was not found next to the running program", name);
     }
     Ok(path)
 }
@@ -148,7 +148,7 @@ pub fn user_home() -> Result<PathBuf> {
     if let Some(home) = env::var_os("USERPROFILE").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(home));
     }
-    bail!("ไม่พบโฟลเดอร์บ้านของผู้ใช้")
+    bail!("User home folder not found")
 }
 
 fn inspect(client: ClientId, sshcc: &Path, home: &Path) -> ClientLink {
@@ -161,12 +161,12 @@ fn inspect(client: ClientId, sshcc: &Path, home: &Path) -> ClientLink {
     let (status, message) = if !detected {
         (
             LinkStatus::MissingClient,
-            format!("ไม่พบ {} บนเครื่องนี้ · คัดลอก snippet ได้", client.label()),
+            format!("{} is not installed on this machine · copy the snippet instead", client.label()),
         )
     } else if !present {
         (
             LinkStatus::Disconnected,
-            format!("ยังไม่ได้เชื่อม {} กับ local service", client.label()),
+            format!("{} is not connected to the local service", client.label()),
         )
     } else if registered
         .as_deref()
@@ -174,13 +174,13 @@ fn inspect(client: ClientId, sshcc: &Path, home: &Path) -> ClientLink {
     {
         (
             LinkStatus::Connected,
-            format!("เชื่อม {} แล้ว", client.label()),
+            format!("{} is connected", client.label()),
         )
     } else {
         (
             LinkStatus::PathMismatch,
             format!(
-                "{} ชี้โปรแกรมอื่นอยู่ กด “อัปเดต path” เพื่อใช้ตัวที่ติดตั้งอยู่",
+                "{} points to another program; press “Update path” to use the installed one",
                 client.label()
             ),
         )
@@ -364,7 +364,7 @@ fn unquote(value: &str) -> String {
 fn write_registration(client: ClientId, sshcc: &Path, home: &Path, update_existing: bool) -> Result<()> {
     let path = config_path(client, home);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("สร้างโฟลเดอร์ {} ไม่ได้", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("Could not create folder {}", parent.display()))?;
     }
     match client {
         ClientId::Codex => write_codex(&path, sshcc, update_existing),
@@ -374,26 +374,26 @@ fn write_registration(client: ClientId, sshcc: &Path, home: &Path, update_existi
 
 fn write_json_client(path: &Path, sshcc: &Path, update_existing: bool) -> Result<()> {
     let before = if path.is_file() {
-        fs::read_to_string(path).with_context(|| format!("อ่าน {} ไม่ได้", path.display()))?
+        fs::read_to_string(path).with_context(|| format!("Could not read {}", path.display()))?
     } else {
         String::new()
     };
     let mut root: Value = if before.trim().is_empty() {
         json!({})
     } else {
-        serde_json::from_str(&before).with_context(|| format!("อ่าน {} ไม่ได้", path.display()))?
+        serde_json::from_str(&before).with_context(|| format!("Could not read {}", path.display()))?
     };
     let servers = root
         .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("รูปแบบ mcpServers ไม่รองรับ"))?
+        .ok_or_else(|| anyhow::anyhow!("Unsupported mcpServers format"))?
         .entry("mcpServers")
         .or_insert_with(|| json!({}));
     let map = servers
         .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("รูปแบบ mcpServers ไม่รองรับ"))?;
+        .ok_or_else(|| anyhow::anyhow!("Unsupported mcpServers format"))?;
     if let Some(existing) = map.get(SERVER_NAME) {
         if !update_existing {
-            bail!("{} มีอยู่แล้วใน config", SERVER_NAME);
+            bail!("{} already exists in the config", SERVER_NAME);
         }
         let mut entry = existing.clone();
         if let Some(object) = entry.as_object_mut() {
@@ -421,7 +421,7 @@ fn write_json_client(path: &Path, sshcc: &Path, update_existing: bool) -> Result
 
 fn write_codex(path: &Path, sshcc: &Path, update_existing: bool) -> Result<()> {
     let before = if path.is_file() {
-        fs::read_to_string(path).with_context(|| format!("อ่าน {} ไม่ได้", path.display()))?
+        fs::read_to_string(path).with_context(|| format!("Could not read {}", path.display()))?
     } else {
         String::new()
     };
@@ -432,7 +432,7 @@ fn write_codex(path: &Path, sshcc: &Path, update_existing: bool) -> Result<()> {
     );
     let after = if let Some(table_start) = before.find(&header) {
         if !update_existing {
-            bail!("{} มีอยู่แล้วใน config", SERVER_NAME);
+            bail!("{} already exists in the config", SERVER_NAME);
         }
         let after_header = table_start + header.len();
         let rest = &before[after_header..];
@@ -459,7 +459,7 @@ fn write_codex(path: &Path, sshcc: &Path, update_existing: bool) -> Result<()> {
         out
     } else {
         if before.to_ascii_lowercase().contains("ssh_control_center") {
-            bail!("พบการตั้งค่า ssh_control_center ที่อ่านไม่ได้ กรุณาตรวจ config.toml ก่อนลองใหม่");
+            bail!("Found an unreadable ssh_control_center entry; check config.toml and try again");
         }
         let mut out = before.trim_end().to_string();
         if !out.is_empty() {
@@ -508,12 +508,12 @@ fn atomic_write(path: &Path, before: &str, after: &str) -> Result<()> {
                 .unwrap_or("config"),
             stamp
         ));
-        fs::copy(path, &backup).with_context(|| format!("สำรอง {} ไม่ได้", path.display()))?;
+        fs::copy(path, &backup).with_context(|| format!("Could not back up {}", path.display()))?;
     }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let temporary = parent.join(format!(".sshcc-config-{}.tmp", uuid::Uuid::new_v4()));
-    fs::write(&temporary, after).with_context(|| format!("เขียน {} ไม่ได้", temporary.display()))?;
-    fs::rename(&temporary, path).with_context(|| format!("บันทึก {} ไม่ได้", path.display()))?;
+    fs::write(&temporary, after).with_context(|| format!("Could not write {}", temporary.display()))?;
+    fs::rename(&temporary, path).with_context(|| format!("Could not save {}", path.display()))?;
     Ok(())
 }
 

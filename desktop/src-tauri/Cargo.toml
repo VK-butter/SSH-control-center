@@ -15,10 +15,11 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 serde_json.workspace = true
+base64.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
 tray-icon = { version = "0.25.1", default-features = false, features = ["libappindicator"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects"] }
